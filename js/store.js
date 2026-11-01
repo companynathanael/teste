@@ -16,7 +16,10 @@
   let state = null;
 
   function emptyState() {
-    return { version: 1, agents: [], links: [], folders: [], files: [], activity: [], core: { x: 0, y: 0 } };
+    return { version: 1, agents: [], links: [], folders: [], files: [], activity: [], core: { x: 0, y: 0 }, permissions: emptyPermissions() };
+  }
+  function emptyPermissions() {
+    return { default: 'ask', rules: [], history: [] };
   }
 
   function seed() {
@@ -59,6 +62,7 @@
     try {
       const raw = localStorage.getItem(KEY);
       state = raw ? Object.assign(emptyState(), JSON.parse(raw)) : seed();
+      state.permissions = Object.assign(emptyPermissions(), state.permissions || {});
     } catch (e) {
       state = seed();
     }
@@ -244,6 +248,33 @@
         file.updatedAt = now();
       }, activity || null);
     },
+
+    /* ---------- permissões de execução ---------- */
+    setPermissionDefault(mode) {
+      if (!['ask', 'allow', 'deny'].includes(mode)) return;
+      const label = { ask: 'perguntar sempre', allow: 'permitir tudo', deny: 'recusar tudo' }[mode];
+      commit(() => { state.permissions.default = mode; }, `Permissões: padrão agora é "${label}"`);
+    },
+    addRule({ from = '*', to = '*', action = '*', decision }) {
+      if (!['allow', 'deny'].includes(decision)) throw new Error('Decisão inválida.');
+      action = String(action || '*').trim() || '*';
+      const r = state.permissions.rules;
+      const same = x => x.from === from && x.to === to && x.action === action;
+      commit(() => {
+        state.permissions.rules = r.filter(x => !same(x));
+        state.permissions.rules.unshift({ id: uid('rl'), from, to, action, decision, createdAt: now() });
+      }, `Regra: ${decision === 'allow' ? 'permitir' : 'recusar'} ${action} de ${from} para ${to}`);
+    },
+    removeRule(id) {
+      commit(() => { state.permissions.rules = state.permissions.rules.filter(x => x.id !== id); }, 'Regra de permissão removida');
+    },
+    logDecision(entry) {
+      commit(() => {
+        state.permissions.history.unshift(Object.assign({ id: uid('pd'), t: now() }, entry));
+        state.permissions.history = state.permissions.history.slice(0, 200);
+      }, entry.by === 'regra' ? null : `${entry.allow ? 'Permitido' : 'Recusado'}: ${entry.from} → ${entry.to} · ${entry.action}`);
+    },
+    clearHistory() { commit(() => { state.permissions.history = []; }, 'Histórico de permissões limpo'); },
 
     exportJSON() { return JSON.stringify(state, null, 2); },
     importJSON(text) {

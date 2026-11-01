@@ -46,14 +46,46 @@
     return path;
   }
 
+  /* ---------- permissões de execução ---------- */
+  // Pedidos que nunca precisam de aprovação: só leitura de estado ou desligar um controle.
+  function isExempt(env) {
+    if (env.action === 'ping') return true;
+    if (env.action === 'ui.control' && env.payload && env.payload.on === false) return true;
+    return false;
+  }
+
+  function ruleMatches(rule, env) {
+    const m = (pat, v) => !pat || pat === '*' || pat === v || (pat.endsWith('.*') && String(v).startsWith(pat.slice(0, -1)));
+    return m(rule.from, env.from) && m(rule.to, env.to) && m(rule.action, env.action);
+  }
+
+  /**
+   * Decide pela política guardada: 'allow', 'deny' ou 'ask'.
+   * policy = { default: 'ask'|'allow'|'deny', rules: [{ from, to, action, decision }] }
+   * A regra mais específica vence (menos curingas).
+   */
+  function decide(policy, env) {
+    if (isExempt(env)) return { decision: 'allow', reason: 'isento' };
+    const rules = ((policy && policy.rules) || []).filter(r => ruleMatches(r, env));
+    if (rules.length) {
+      const score = r => ['from', 'to', 'action'].reduce((n, k) => n + (r[k] && r[k] !== '*' ? (String(r[k]).endsWith('.*') ? 1 : 2) : 0), 0);
+      rules.sort((a, b) => score(b) - score(a));
+      return { decision: rules[0].decision, rule: rules[0] };
+    }
+    return { decision: (policy && policy.default) || 'ask', reason: 'padrão' };
+  }
+
   /**
    * Cria um roteador.
    * @param {object} o
    * @param {() => {agents:{id,name,kind}[], links:[string,string][]}} o.topology
    * @param {(env:object) => void} o.deliver  entrega um envelope ao agente env.to
    * @param {(env:object, info:object) => void} [o.onTraffic]  observador (UI/log)
+   * @param {(env:object, path:string[]) => Promise<{allow:boolean, message?:string, code?:string}>} [o.authorize]
+   *        permissão de execução: chamada para cada request entre agentes; sem ela, tudo é entregue
+   * @param {number} [o.permissionWait]  quanto tempo (ms) o remetente deve esperar pela decisão
    */
-  function createRouter({ topology, deliver, onTraffic = () => {} }) {
+  function createRouter({ topology, deliver, onTraffic = () => {}, authorize = null, permissionWait = 60000 }) {
     const online = new Map(); // id -> { name, role, kind, actions, since, seen }
 
     const reply = (req, ok, payload, error) => ({
@@ -76,7 +108,7 @@
         const p = online.get(a.id);
         return {
           id: a.id, name: (p && p.name) || a.name, kind: a.kind,
-          online: !!p, actions: p ? p.actions : [],
+          online: !!p, actions: p ? p.actions : [], sdk: p ? p.sdk : null,
           route: findPath(topo, a.id, CORE)
         };
       });
@@ -104,7 +136,7 @@
         if (!known(env.from)) return fail(env, 'unknown_agent', `"${env.from}" não está cadastrado no Asafe.`);
         const p = env.payload || {};
         online.set(env.from, {
-          name: p.name || env.from, role: p.role || '', kind: p.kind || 'ia',
+          name: p.name || env.from, role: p.role || '', kind: p.kind || 'ia', sdk: p.sdk || 1,
           actions: Array.isArray(p.actions) ? p.actions : [], since: online.get(env.from)?.since || Date.now(), seen: Date.now()
         });
         onTraffic(env, { status: 'presence' });
@@ -128,10 +160,41 @@
       if (!path) return fail(env, 'no_route', `Não existe linha de servidor entre ${env.from} e ${env.to}.`);
       if (!online.has(env.to)) return fail(env, 'offline', `${env.to} está desconectado do Asafe agora (abra a interface dele).`);
 
+      if (env.type === 'request' && authorize) return gate(env, path);
+      return forward(env, path);
+    }
+
+    function forward(env, path) {
       const out = Object.assign({}, env, { via: CORE, route: path });
       deliver(out);
       onTraffic(out, { status: 'ok', route: path });
       return { ok: true, route: path };
+    }
+
+    /** Segura o pedido até a permissão de execução ser dada ou negada. */
+    function gate(env, path) {
+      let answered = false;
+      const notice = state => deliver({
+        asafe: VERSION, id: uid(), type: 'progress', from: CORE, to: env.from, replyTo: env.id, action: env.action,
+        payload: { asafe: 'permission', state, timeoutMs: permissionWait }, ts: Date.now(), via: CORE
+      });
+      const pendingTimer = setTimeout(() => { if (!answered) notice('pending'); }, 0);
+      Promise.resolve()
+        .then(() => authorize(env, path))
+        .catch(e => ({ allow: false, message: e.message || 'Falha ao decidir a permissão.' }))
+        .then(res => {
+          answered = true;
+          clearTimeout(pendingTimer);
+          res = res || { allow: false };
+          if (!res.allow) {
+            onTraffic(env, { status: 'denied', route: path });
+            return fail(env, res.code || 'denied', res.message || `O Asafe recusou a execução de "${env.action}".`);
+          }
+          if (!online.has(env.to)) return fail(env, 'offline', `${env.to} se desconectou enquanto o pedido esperava permissão.`);
+          if (res.waited) notice('granted');
+          forward(env, path);
+        });
+      return { ok: true, pending: true, route: path };
     }
 
     /** Remove agentes que pararam de mandar sinal (heartbeat). */
@@ -145,5 +208,5 @@
     return { route, roster, sweep, online, findPath: (a, b) => findPath(topology(), a, b) };
   }
 
-  return { VERSION, CORE, uid, slug, validate, findPath, createRouter };
+  return { VERSION, CORE, uid, slug, validate, findPath, createRouter, decide, isExempt, ruleMatches };
 });

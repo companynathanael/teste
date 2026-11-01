@@ -8,6 +8,7 @@ O **Asafe** é o centro da rede de IAs: conecta o agente principal (**Horácio**
 | --- | --- |
 | **Dados de Servidores** | Cada IA tem um servidor dentro do Asafe, com pastas (Memória, Conversas, Logs, Configurações + pastas próprias). Envie arquivos, crie registros, busque, baixe e apague dados. |
 | **Linhas de Conexão** | Fluxograma com o Asafe no centro. Adicione IAs e arraste do conector (●) de um nó até outro para criar uma linha. Nós sem caminho até o Asafe ficam *isolados*. |
+| **Permissões** | Todo pedido de execução entre agentes (ex.: Horácio → Miquéias) espera aqui você **aceitar** ou **recusar**. Dá para lembrar a decisão como regra, escolher o padrão (perguntar, permitir tudo ou recusar tudo) e ver o histórico. Um cartão flutuante avisa em qualquer aba. |
 
 ### Atalhos do fluxograma
 - Arrastar fundo: mover · roda do mouse: zoom
@@ -49,6 +50,7 @@ js/data.js        aba Dados de Servidores
 js/flow.js        aba Linhas de Conexão (fluxograma)
 js/app.js         boot, abas, backup
 js/bus.js         roteador das linhas (navegador) / ponte com o servidor
+js/perms.js       permissões de execução: pedidos, regras e histórico
 sdk/              asafe-router.js (regras), asafe-link.js (SDK dos agentes) e asafe-ui.js (controle de tela)
 server/           servidor Node opcional
 integrations/     patches do Horácio e do Miquéias

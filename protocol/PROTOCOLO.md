@@ -67,7 +67,7 @@ O Asafe só entrega um pedido quando:
 3. existe caminho de linhas entre elas (`no_route`);
 4. o destino está com a interface aberta e conectada (`offline`).
 
-Caso contrário, o próprio Asafe responde ao remetente com `ok: false` e o código entre parênteses. Outros códigos: `timeout`, `unknown_action`, `busy`, `not_ready`, `bad_request`, `model_error`.
+Caso contrário, o próprio Asafe responde ao remetente com `ok: false` e o código entre parênteses. Outros códigos: `denied`, `permission_timeout`, `no_supervisor` (permissões, seção 5), `timeout`, `unknown_action`, `busy`, `not_ready`, `bad_request`, `model_error`.
 
 Ações do próprio núcleo (`to: "asafe"`):
 
@@ -120,7 +120,22 @@ Habilidades do Miquéias pelo Horácio (detalhes em `docs/CONTROLE.md` do reposi
 | `Miquéias, ligue o piloto automático em ETH com RSI ao vivo`, `/piloto on …` | `trade.autopilot { on: true, … }`, só depois de **Confirmar** no Horácio |
 | `Miquéias, desligue o piloto`, `/piloto off` | `trade.autopilot { on: false }` |
 
-## 5. Controle de tela (`ui.*`)
+## 5. Permissões de execução
+
+Todo `request` de um agente para outro (ex.: Horácio → Miquéias) passa pela **aba Permissões** do Asafe antes de ser entregue. Respostas, `progress` e `event` não passam.
+
+1. O Asafe consulta a política: **regras** (`from`, `to`, `action`, que pode ser exata, `prefixo.*` ou `*`) e, sem regra, o **padrão**: `ask` (perguntar), `allow` (permitir tudo) ou `deny` (recusar tudo). A regra mais específica vence.
+2. Com `ask`, o pedido fica aguardando na aba Permissões e num cartão flutuante em qualquer aba. O Sr. Nathanael **aceita** ou **recusa**, e pode lembrar a decisão: só desta vez, sempre para a ação, sempre para `prefixo.*` ou tudo entre os dois agentes.
+3. Enquanto espera, o Asafe manda ao remetente `progress { asafe: "permission", state: "pending", timeoutMs: 60000 }`. Se o pedido for aceito, manda `state: "granted"` e entrega o pedido.
+4. Recusado: o remetente recebe `ok: false` com `denied`. Sem resposta em 60 s: `permission_timeout`. No modo servidor, sem a interface do Asafe aberta para aprovar: `no_supervisor`.
+
+Nunca precisam de permissão: `ping` e `ui.control { on: false }` (parar um controle de tela).
+
+**SDK:** o `asafe-link.js` atual (hello com `sdk: 2`) pausa o prazo do pedido enquanto ele espera permissão e avisa a página por `link.on("permission", ({ id, state, action }) => …)`. Com a versão antiga, o prazo continua correndo: um pedido com prazo curto (ex.: `trade.status`, 20 s) pode expirar no remetente antes da decisão. Por isso, atualize a cópia do `asafe-link.js` em cada agente.
+
+Todas as decisões ficam no **histórico** da aba Permissões: quem pediu, o quê e se foi você, uma regra ou o tempo que decidiu.
+
+## 6. Controle de tela (`ui.*`)
 
 Com a permissão do Sr. Nathanael, o Horácio pode **operar a tela** de outro agente como uma pessoa: ler, clicar, digitar, rolar e esperar. São `request`/`response` normais do protocolo v1, e o roteador não muda.
 
@@ -163,7 +178,7 @@ No Horácio: `Miquéias, leia a tela`, `Miquéias, clique em Nova conversa`, `Mi
 
 Cada passo passa pelo Asafe e fica no log `Conversas` das duas IAs, com o conteúdo cortado em 600 caracteres.
 
-## 6. Transportes
+## 7. Transportes
 
 O SDK [`sdk/asafe-link.js`](../sdk/asafe-link.js) escolhe sozinho:
 
@@ -174,7 +189,7 @@ O SDK [`sdk/asafe-link.js`](../sdk/asafe-link.js) escolhe sozinho:
 
 No modo navegador, os agentes enviam `{ dir: "up", env }` no canal; o Asafe entrega `{ dir: "down", env }` e manda `core.heartbeat` a cada 4 s.
 
-## 7. Usando o SDK
+## 8. Usando o SDK
 
 ```html
 <script src="asafe-link.js"></script>

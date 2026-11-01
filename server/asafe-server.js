@@ -13,7 +13,7 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
-const { createRouter, VERSION, CORE } = require('../sdk/asafe-router.js');
+const { createRouter, decide, VERSION, CORE } = require('../sdk/asafe-router.js');
 
 const PORT = Number(process.env.ASAFE_PORT || 7300);
 const HOST = process.env.ASAFE_HOST || '127.0.0.1';
@@ -21,11 +21,38 @@ const DATA = process.env.ASAFE_DATA || path.join(__dirname, 'data');
 const TOPO_FILE = path.join(DATA, 'topology.json');
 fs.mkdirSync(path.join(DATA, 'logs'), { recursive: true });
 
-let topology = { agents: [], links: [] };
+let topology = { agents: [], links: [], policy: { default: 'ask', rules: [] } };
 try { topology = JSON.parse(fs.readFileSync(TOPO_FILE, 'utf8')); } catch (e) { /* ainda não publicada */ }
 
 const streams = new Map(); // agentId -> Set<res>
 const observers = new Set();
+const PERMISSION_WAIT = 60000;
+const waiting = new Map(); // id do pedido -> { resolve, timer }
+
+/** Permissão de execução: política salva ou pergunta à interface do Asafe. */
+function authorize(env, path) {
+  const d = decide(topology.policy, env);
+  if (d.decision === 'allow') return Promise.resolve({ allow: true });
+  if (d.decision === 'deny') return Promise.resolve({ allow: false, code: 'denied', message: `O Asafe recusou "${env.action}" por uma regra de permissão.` });
+  if (!observers.size) {
+    return Promise.resolve({ allow: false, code: 'no_supervisor', message: `"${env.action}" precisa de permissão, mas a interface do Asafe não está aberta para aprovar.` });
+  }
+  return new Promise(resolve => {
+    const timer = setTimeout(() => settleDecision(env.id, { allow: false, code: 'permission_timeout', message: `Ninguém respondeu no Asafe a tempo ao pedido "${env.action}".` }), PERMISSION_WAIT + 2000);
+    waiting.set(env.id, { resolve, timer });
+    for (const res of observers) sse(res, { kind: 'permission', env, path, timeoutMs: PERMISSION_WAIT });
+  });
+}
+
+function settleDecision(id, result) {
+  const w = waiting.get(id);
+  if (!w) return false;
+  waiting.delete(id);
+  clearTimeout(w.timer);
+  w.resolve(Object.assign({ waited: true }, result));
+  for (const res of observers) sse(res, { kind: 'permission-closed', id });
+  return true;
+}
 
 function sse(res, data) { res.write(`data: ${JSON.stringify(data)}\n\n`); }
 
@@ -37,6 +64,8 @@ function log(agentId, env) {
 
 const router = createRouter({
   topology: () => topology,
+  authorize,
+  permissionWait: PERMISSION_WAIT,
   deliver(env) {
     for (const res of streams.get(env.to) || []) sse(res, env);
   },
@@ -123,10 +152,18 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'POST' && url.pathname === '/topology') {
       const t = await readBody(req);
       if (!Array.isArray(t.agents) || !Array.isArray(t.links)) return json(res, 400, { ok: false, message: 'topologia inválida' });
-      topology = { agents: t.agents, links: t.links };
+      topology = { agents: t.agents, links: t.links, policy: t.policy || topology.policy || { default: 'ask', rules: [] } };
       fs.writeFile(TOPO_FILE, JSON.stringify(topology, null, 2), () => {});
       presence();
       return json(res, 200, { ok: true });
+    }
+
+    if (req.method === 'POST' && url.pathname === '/decision') {
+      const d = await readBody(req);
+      const ok = settleDecision(d.id, d.allow
+        ? { allow: true }
+        : { allow: false, code: d.code || 'denied', message: d.message || 'O Sr. Nathanael recusou no Asafe.' });
+      return json(res, ok ? 200 : 404, { ok, message: ok ? undefined : 'pedido inexistente ou já decidido' });
     }
 
     json(res, 404, { ok: false, message: 'rota inexistente' });

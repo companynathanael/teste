@@ -52,6 +52,11 @@
           <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><circle cx="4" cy="5" r="2"/><circle cx="20" cy="5" r="2"/><circle cx="4" cy="19" r="2"/><circle cx="20" cy="19" r="2"/><path d="M6 6l4 4M18 6l-4 4M6 18l4-4M18 18l-4-4"/></svg>
           Linhas de Conexão
         </button>
+        <button class="tab" role="tab" data-tab="perms" aria-selected="false">
+          <svg viewBox="0 0 24 24"><path d="M12 3 4 6v6c0 4.5 3.4 8.3 8 9 4.6-.7 8-4.5 8-9V6Z"/><path d="m9 12 2 2 4-4"/></svg>
+          Permissões
+          <span class="tab-badge mono" id="permBadge" hidden>0</span>
+        </button>
       </nav>
 
       <div class="top-stats">
@@ -199,8 +204,60 @@
           </div>
         </aside>
       </section>
+      <!-- ============ ABA 3: PERMISSÕES DE EXECUÇÃO ============ -->
+      <section class="view" id="view-perms" role="tabpanel">
+        <section class="perm-main glass">
+          <img class="explorer-watermark" src="assets/asafe-mark.png" alt="" aria-hidden="true" />
+          <div class="perm-head">
+            <div>
+              <h2>Pedidos de execução</h2>
+              <p class="muted">Quando um agente pede para executar algo em outro, o Asafe segura o pedido até você decidir.</p>
+            </div>
+            <span class="chip mono" id="permCount">0</span>
+          </div>
+          <div class="perm-list" id="permPending"></div>
+
+          <div class="perm-hist-head">
+            <h3 class="section-title">Histórico de decisões</h3>
+            <button class="btn ghost" id="btnClearHistory">Limpar</button>
+          </div>
+          <ol class="perm-history" id="permHistory"></ol>
+        </section>
+
+        <aside class="flow-side">
+          <div class="glass panel">
+            <div class="panel-head"><h2>Política padrão</h2></div>
+            <div class="seg seg3" id="permDefault" role="radiogroup" aria-label="Política padrão">
+              <label><input type="radio" name="permdef" value="ask" /><span>Perguntar</span></label>
+              <label><input type="radio" name="permdef" value="allow" /><span>Permitir tudo</span></label>
+              <label><input type="radio" name="permdef" value="deny" /><span>Recusar tudo</span></label>
+            </div>
+            <p class="muted small">Vale para pedidos sem regra. <b>ping</b> e desligar o controle de tela nunca precisam de permissão.</p>
+          </div>
+
+          <div class="glass panel grow">
+            <div class="panel-head"><h2>Regras</h2></div>
+            <ul class="rule-list" id="permRules"></ul>
+            <form class="form rule-form" id="ruleForm" autocomplete="off">
+              <div class="rule-row">
+                <label>De<select name="from" id="ruleFrom"></select></label>
+                <label>Para<select name="to" id="ruleTo"></select></label>
+              </div>
+              <label>Ação <input name="action" list="ruleActions" placeholder="ex.: chat.ask, ui.* ou * (tudo)" /></label>
+              <datalist id="ruleActions"></datalist>
+              <div class="seg" role="radiogroup" aria-label="Decisão">
+                <label><input type="radio" name="decision" value="allow" checked /><span>Permitir</span></label>
+                <label><input type="radio" name="decision" value="deny" /><span>Recusar</span></label>
+              </div>
+              <button class="btn primary block" type="submit">Criar regra</button>
+            </form>
+          </div>
+        </aside>
+      </section>
     </main>
   </div>
+
+  <div class="perm-dock" id="permDock" aria-live="polite"></div>
 
   <!-- Modal -->
   <div class="modal" id="modal" hidden>
@@ -222,6 +279,7 @@
   <script src="js/ui.js"></script>
   <script src="js/data.js"></script>
   <script src="js/flow.js"></script>
+  <script src="js/perms.js"></script>
   <script src="js/bus.js"></script>
   <script src="js/app.js"></script>
 </body>

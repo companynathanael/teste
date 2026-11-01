@@ -45,6 +45,7 @@
     if (!['request', 'response', 'event'].includes(env.type)) return;
     // consultas ao próprio núcleo (roster/ping) não vão para o log, só recusas
     if ((env.to === CORE || env.from === CORE) && info.status !== 'error') return;
+    if (info.status === 'denied') return; // a resposta de recusa já entra no log
     let line;
     if (info.status === 'error' && env.type === 'response') {
       line = `[${hhmm(env.ts)}] ✕ ${env.action} recusado para ${env.to}: ${env.error && env.error.message}`;
@@ -70,7 +71,9 @@
     if (mode !== 'server') return;
     clearTimeout(pushTimer);
     pushTimer = setTimeout(() => {
-      fetch(server + '/topology', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(topology()) })
+      const { default: def, rules } = Store.state.permissions;
+      const body = Object.assign(topology(), { policy: { default: def, rules } });
+      fetch(server + '/topology', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
         .catch(() => {});
     }, 150);
   }
@@ -84,6 +87,17 @@
       let m; try { m = JSON.parse(e.data); } catch (err) { return; }
       if (m.roster) { roster = m.roster; emit('change'); }
       if (m.kind === 'traffic') record(m.env, m.info);
+      if (m.kind === 'permission') {
+        // o servidor segurou o pedido: quem decide é você, aqui
+        Perms.prompt(m.env, m.path, m.timeoutMs).then(res => {
+          if (!res) return; // decidido em outra janela
+          fetch(server + '/decision', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id: m.env.id, allow: res.allow, code: res.code, message: res.message })
+          }).catch(() => {});
+        });
+      }
+      if (m.kind === 'permission-closed') Perms.close(m.id);
     };
     es.onerror = () => { roster = []; emit('change'); };
     es.onopen = () => { pushTopology(); emit('change'); };
@@ -97,6 +111,7 @@
     router = createRouter({
       topology,
       deliver: env => bc.postMessage({ dir: 'down', env }),
+      authorize: (env, path) => Perms.authorize(env, path),
       onTraffic: (env, info) => {
         if (info.status === 'presence') { roster = router.roster(); emit('change'); return; }
         record(env, info);

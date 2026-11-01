@@ -31,7 +31,7 @@
       id: opts.id, name: opts.name || opts.id, role: opts.role || '', kind: opts.kind || 'ia'
     };
     const actions = opts.actions || {};
-    const listeners = { status: new Set(), event: new Set(), message: new Set() };
+    const listeners = { status: new Set(), event: new Set(), message: new Set(), permission: new Set() };
     const pending = new Map(); // id -> { resolve, reject, timer, onProgress }
     const seen = new Set();
 
@@ -48,7 +48,7 @@
     }, extra || {});
 
     const hello = () => envelope('hello', CORE, null, {
-      name: me.name, role: me.role, kind: me.kind,
+      name: me.name, role: me.role, kind: me.kind, sdk: 2,
       actions: Object.keys(actions).map(name => ({ name, desc: actions[name].desc || '' }))
     });
 
@@ -89,6 +89,17 @@
       emit('message', env);
 
       if (env.type === 'response') return settle(env.replyTo, env.ok !== false, env.payload, env.error);
+      if (env.type === 'progress' && env.from === CORE && env.payload && env.payload.asafe === 'permission') {
+        // O Asafe segurou o pedido para pedir permissão: o prazo fica pausado até a decisão.
+        const p = pending.get(env.replyTo);
+        if (p) {
+          clearTimeout(p.timer);
+          const wait = env.payload.state === 'pending' ? (env.payload.timeoutMs || 60000) + 5000 : p.timeout;
+          p.timer = setTimeout(() => settle(env.replyTo, false, null, p.timeoutError()), wait);
+        }
+        emit('permission', { id: env.replyTo, state: env.payload.state, action: env.action });
+        return;
+      }
       if (env.type === 'progress') {
         const p = pending.get(env.replyTo);
         if (p && p.onProgress) try { p.onProgress(env.payload); } catch (e) { console.error(e); }
@@ -178,13 +189,14 @@
       request(to, action, payload = {}, { timeout = 90000, onProgress } = {}) {
         return new Promise((resolve, reject) => {
           const env = envelope('request', to, action, payload);
-          const timer = setTimeout(() => settle(env.id, false, null, {
+          const timeoutError = () => ({
             code: 'timeout',
             message: mode === 'local'
               ? 'Sem resposta. Confira se o Asafe e o agente de destino estão abertos.'
               : 'Sem resposta do agente de destino.'
-          }), timeout);
-          pending.set(env.id, { resolve, reject, timer, onProgress });
+          });
+          const timer = setTimeout(() => settle(env.id, false, null, timeoutError()), timeout);
+          pending.set(env.id, { resolve, reject, timer, onProgress, timeout, timeoutError });
           const go = () => post(env).catch(e => settle(env.id, false, null, { code: 'offline', message: e.message }));
           if (mode) go(); else { const off = api.on('status', () => { if (mode) { off(); go(); } }); }
         });
@@ -195,6 +207,7 @@
       roster() { return api.request(CORE, 'roster', {}, { timeout: 8000 }).then(r => r.agents); },
       /** Registra mais uma ação depois de conectado. */
       handle(name, handler, desc = '') { actions[name] = { handler, desc }; if (mode) post(hello()); },
+      /** kind: 'status' | 'event' | 'message' | 'permission' ({ id, state: 'pending'|'granted', action }) */
       on(kind, fn) { listeners[kind].add(fn); return () => listeners[kind].delete(fn); },
       close() {
         if (closed) return;

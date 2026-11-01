@@ -15,6 +15,7 @@
     $$('.view').forEach(v => v.classList.toggle('is-active', v.id === 'view-' + name));
     moveIndicator();
     FlowView.setActive(name === 'flow');
+    if (window.Perms) Perms.render();
     try { localStorage.setItem('asafe.tab', name); } catch (e) { /* ignore */ }
   }
 
@@ -66,6 +67,7 @@
     DataView.init();
     FlowView.init();
 
+    Perms.init();
     Store.on(() => { DataView.render(); FlowView.render(); stats(); });
 
     $$('.tab').forEach(t => t.addEventListener('click', () => setTab(t.dataset.tab)));
@@ -96,7 +98,7 @@
       else if (env.type === 'response') {
         if (info.status === 'error') {
           FlowView.pulseRoute([env.from, env.to], 'err');
-          toast(`Linha recusada: ${env.error && env.error.message}`, 'err');
+          if (!env.error || !['denied', 'permission_timeout'].includes(env.error.code)) toast(`Linha recusada: ${env.error && env.error.message}`, 'err');
         } else FlowView.pulseRoute(info.route, 'res');
       }
     });
@@ -104,7 +106,7 @@
 
     let saved = 'data';
     try { saved = localStorage.getItem('asafe.tab') || 'data'; } catch (e) { /* ignore */ }
-    setTab(saved === 'flow' ? 'flow' : 'data');
+    setTab(['flow', 'perms'].includes(saved) ? saved : 'data');
     stats();
     clock(); setInterval(clock, 1000);
     boot();
