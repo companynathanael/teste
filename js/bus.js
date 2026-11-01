@@ -18,6 +18,7 @@
   let server = null;
   let roster = [];
   let router = null;
+  let serverGrants = [];
 
   function serverUrl() {
     try { return localStorage.getItem(SERVER_KEY) || DEFAULT_SERVER; } catch (e) { return DEFAULT_SERVER; }
@@ -98,6 +99,7 @@
         });
       }
       if (m.kind === 'permission-closed') Perms.close(m.id);
+      if (m.grants) { serverGrants = m.grants; emit('change'); }
     };
     es.onerror = () => { roster = []; emit('change'); };
     es.onopen = () => { pushTopology(); emit('change'); };
@@ -112,6 +114,9 @@
       topology,
       deliver: env => bc.postMessage({ dir: 'down', env }),
       authorize: (env, path) => Perms.authorize(env, path),
+      policy: () => Store.state.permissions,
+      ask: env => Perms.prompt(env),
+      onGrants: () => emit('change'),
       onTraffic: (env, info) => {
         if (info.status === 'presence') { roster = router.roster(); emit('change'); return; }
         record(env, info);
@@ -151,6 +156,14 @@
     get mode() { return mode; },
     get server() { return server; },
     get roster() { return roster; },
+    /** Permissões ativas (concedidas por permission.request). */
+    get grants() { return mode === 'server' ? serverGrants : router ? router.grants : []; },
+    revoke(grantId) {
+      if (mode === 'server') {
+        return fetch(server + '/revoke', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ grantId }) }).then(r => r.json()).then(r => r.ok);
+      }
+      return Promise.resolve(router ? router.revoke(grantId) : false);
+    },
     onlineIds,
     isOnline: agentId => onlineIds().has(slug(Store.nameOf(agentId))),
     slugOf: agentId => agentId === CORE ? CORE : slug(Store.nameOf(agentId)),

@@ -674,3 +674,13 @@ textarea.code { font: 12.5px/1.6 var(--mono); }
   .perm-card footer { grid-template-columns: 1fr 1fr; }
   .perm-card footer select { grid-column: 1 / -1; }
 }
+.perm-kind { color: var(--text-2); font-size: 12.5px; }
+.perm-card.scope .perm-action strong { font-weight: 600; font-size: 14.5px; }
+.perm-note { margin: 0; font-size: 12px; color: var(--text-2); }
+.grant-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; max-height: 200px; overflow: auto; }
+.grant { display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: center; padding: 8px 8px 8px 12px; border-radius: 10px; background: linear-gradient(90deg, rgba(229,20,42,.1), rgba(255,255,255,.02)); border: 1px solid rgba(229,20,42,.3); animation: fadeUp .35s var(--ease) both; }
+.grant-main { display: grid; min-width: 0; }
+.grant-main b { font-weight: 500; font-size: 13px; }
+.grant-main small { color: var(--text-3); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.btn.sm { height: 30px; padding: 0 10px; font-size: 12px; }
+#view-perms .flow-side { overflow: auto; }

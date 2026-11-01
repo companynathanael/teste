@@ -75,6 +75,31 @@
     return { decision: (policy && policy.default) || 'ask', reason: 'padrão' };
   }
 
+  /* ---------- escopos (permissões pedidas pelo agente, ver PERMISSOES.md do Horácio) ---------- */
+  const SCOPES = {
+    conversa: { label: 'conversar com', patterns: ['chat.*'] },
+    pesquisa: { label: 'pesquisar na web pelo', patterns: ['research.run'] },
+    'trade.leitura': { label: 'ver e estudar o trade do', patterns: ['trade.status', 'trade.study'] },
+    'trade.piloto': { label: 'ligar ou desligar o piloto automático do', patterns: ['trade.autopilot'] },
+    controle: { label: 'operar a tela do', patterns: ['ui.*'] },
+    configuracao: { label: 'mudar as configurações do', patterns: ['settings.*'] },
+    outros: { label: 'usar outras funções do', patterns: [] }
+  };
+  function scopeOf(action) {
+    if (/^chat\./.test(action)) return 'conversa';
+    if (action === 'research.run') return 'pesquisa';
+    if (action === 'trade.status' || action === 'trade.study') return 'trade.leitura';
+    if (action === 'trade.autopilot') return 'trade.piloto';
+    if (/^ui\./.test(action)) return 'controle';
+    if (/^settings\./.test(action)) return 'configuracao';
+    return 'outros';
+  }
+  /** Padrões de ação que um escopo cobre (para regras); "outros" usa as ações pedidas. */
+  function scopePatterns(scope, actions) {
+    const s = SCOPES[scope];
+    return s && s.patterns.length ? s.patterns : (actions && actions.length ? actions : ['*']);
+  }
+
   /**
    * Cria um roteador.
    * @param {object} o
@@ -84,9 +109,15 @@
    * @param {(env:object, path:string[]) => Promise<{allow:boolean, message?:string, code?:string}>} [o.authorize]
    *        permissão de execução: chamada para cada request entre agentes; sem ela, tudo é entregue
    * @param {number} [o.permissionWait]  quanto tempo (ms) o remetente deve esperar pela decisão
+   * @param {() => object} [o.policy]  política atual { default, rules }
+   * @param {(env:object) => Promise<{allow:boolean, message?:string}>} [o.ask]  pergunta ao Sr. Nathanael (permission.request)
+   * @param {() => void} [o.onGrants]  avisado quando as permissões ativas mudam
    */
-  function createRouter({ topology, deliver, onTraffic = () => {}, authorize = null, permissionWait = 60000 }) {
+  function createRouter({ topology, deliver, onTraffic = () => {}, authorize = null, permissionWait = 60000, policy = () => null, ask = null, onGrants = () => {} }) {
     const online = new Map(); // id -> { name, role, kind, actions, since, seen }
+    let grants = []; // { grantId, from, to, scope, actions, reason, createdAt, expiresAt }
+    const validGrant = g => !g.expiresAt || g.expiresAt > Date.now();
+    const findGrant = (from, to, scope) => grants.find(g => g.from === from && g.to === to && g.scope === scope && validGrant(g));
 
     const reply = (req, ok, payload, error) => ({
       asafe: VERSION, id: uid(), type: 'response', from: CORE, to: req.from,
@@ -114,15 +145,81 @@
       });
     }
 
+    /* ---------- permissões por escopo (permission.*) ---------- */
+    function grant(from, to, scope, actions, reason) {
+      const g = { grantId: uid().replace('msg_', 'grant_'), from, to, scope, actions: actions || [], reason: reason || '', createdAt: Date.now(), expiresAt: null };
+      grants = grants.filter(x => !(x.from === from && x.to === to && x.scope === scope)).concat(g);
+      onGrants();
+      return g;
+    }
+
+    async function permissionRequest(env) {
+      const p = env.payload || {};
+      const to = String(p.to || ''), scope = String(p.scope || '');
+      const topo = topology();
+      if (!topo.agents.some(a => a.id === to)) throw Object.assign(new Error(`"${to}" não está cadastrado no Asafe.`), { code: 'unknown_agent' });
+      if (!SCOPES[scope]) throw Object.assign(new Error(`Escopo desconhecido: "${scope}".`), { code: 'bad_request' });
+      const existing = findGrant(env.from, to, scope);
+      const answer = g => ({ granted: true, to, scope, grantId: g.grantId, expiresAt: g.expiresAt || undefined });
+      if (existing) return answer(existing);
+
+      // a política decide pelos padrões do escopo: todos permitidos → concede; algum recusado → nega
+      const pats = scopePatterns(scope, p.actions);
+      const ds = pats.map(a => decide(policy(), { from: env.from, to, action: a }).decision);
+      let allow;
+      if (ds.includes('deny')) allow = false;
+      else if (ds.every(d => d === 'allow')) allow = true;
+      else if (!ask) allow = false;
+      else {
+        const res = await ask({
+          asafe: VERSION, id: env.id, type: 'request', kind: 'permission', from: env.from, to,
+          action: 'permission:' + scope, payload: { scope, actions: p.actions || [], reason: p.reason || '' }, ts: Date.now()
+        });
+        if (res === null) return null; // decidido em outro lugar
+        allow = !!(res && res.allow);
+        if (!allow) throw Object.assign(new Error((res && res.message) || `O Sr. Nathanael recusou a permissão de ${scope}.`), { code: (res && res.code) || 'denied' });
+      }
+      if (!allow) throw Object.assign(new Error(`O Asafe recusou a permissão de ${scope} por uma regra.`), { code: 'denied' });
+      return answer(grant(env.from, to, scope, p.actions, p.reason));
+    }
+
+    function release(from, to, scope) {
+      const before = grants.length;
+      grants = grants.filter(g => !(g.from === from && (!to || g.to === to) && (!scope || g.scope === scope)));
+      const n = before - grants.length;
+      if (n) onGrants();
+      return n;
+    }
+
+    /** O Sr. Nathanael retira uma permissão: avisa o agente com permission.revoked. */
+    function revoke(grantId) {
+      const g = grants.find(x => x.grantId === grantId);
+      if (!g) return false;
+      grants = grants.filter(x => x !== g);
+      onGrants();
+      const ev = { asafe: VERSION, id: uid(), type: 'event', from: CORE, to: g.from, action: 'permission.revoked', payload: { to: g.to, scope: g.scope }, ts: Date.now(), via: CORE };
+      deliver(ev);
+      onTraffic(ev, { status: 'ok', route: [CORE, g.from] });
+      return true;
+    }
+
+    const CORE_ACTIONS = {
+      ping: () => ({ pong: true, ts: Date.now() }),
+      roster: () => ({ agents: roster() }),
+      'permission.request': permissionRequest,
+      'permission.release': env => ({ released: release(env.from, (env.payload || {}).to, (env.payload || {}).scope) }),
+      'permission.list': env => ({ grants: grants.filter(g => g.from === env.from && validGrant(g)).map(g => ({ to: g.to, scope: g.scope, grantId: g.grantId, expiresAt: g.expiresAt || undefined })) })
+    };
+
     function handleCore(env) {
       if (env.type !== 'request') return { ok: true };
-      let payload;
-      if (env.action === 'ping') payload = { pong: true, ts: Date.now() };
-      else if (env.action === 'roster') payload = { agents: roster() };
-      else return fail(env, 'unknown_action', `O Asafe não conhece a ação "${env.action}".`);
-      const r = reply(env, true, payload);
-      deliver(r);
-      onTraffic(env, { status: 'ok', route: [env.from, CORE] });
+      const fn = CORE_ACTIONS[env.action];
+      if (!fn) return fail(env, 'unknown_action', `O Asafe não conhece a ação "${env.action}".`);
+      Promise.resolve().then(() => fn(env)).then(payload => {
+        if (payload === null) return;
+        deliver(reply(env, true, payload));
+        onTraffic(env, { status: 'ok', route: [env.from, CORE] });
+      }).catch(e => fail(env, e.code || 'error', e.message || String(e)));
       return { ok: true };
     }
 
@@ -160,6 +257,8 @@
       if (!path) return fail(env, 'no_route', `Não existe linha de servidor entre ${env.from} e ${env.to}.`);
       if (!online.has(env.to)) return fail(env, 'offline', `${env.to} está desconectado do Asafe agora (abra a interface dele).`);
 
+      // permissão ativa do escopo (pedida antes com permission.request): passa direto
+      if (env.type === 'request' && findGrant(env.from, env.to, scopeOf(env.action))) return forward(env, path);
       if (env.type === 'request' && authorize) return gate(env, path);
       return forward(env, path);
     }
@@ -205,8 +304,12 @@
       return changed;
     }
 
-    return { route, roster, sweep, online, findPath: (a, b) => findPath(topology(), a, b) };
+    return {
+      route, roster, sweep, online, revoke, release,
+      get grants() { return grants.filter(validGrant); },
+      findPath: (a, b) => findPath(topology(), a, b)
+    };
   }
 
-  return { VERSION, CORE, uid, slug, validate, findPath, createRouter, decide, isExempt, ruleMatches };
+  return { VERSION, CORE, uid, slug, validate, findPath, createRouter, decide, isExempt, ruleMatches, SCOPES, scopeOf, scopePatterns };
 });

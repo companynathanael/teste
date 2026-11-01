@@ -28,6 +28,7 @@
 
   function preview(env) {
     const p = env.payload || {};
+    if (env.kind === 'permission') return p.reason ? `“${p.reason}”` : `escopo ${p.scope}`;
     const text = p.prompt || p.query || p.text;
     let out = text ? String(text) : JSON.stringify(p, null, 1);
     if (text && Object.keys(p).length > 1) {
@@ -71,7 +72,9 @@
       pending.set(env.id, item);
       render();
       emit();
-      toast(`${nameOf(env.from)} pede permissão para executar ${env.action} em ${nameOf(env.to)}`);
+      toast(env.kind === 'permission'
+        ? `${nameOf(env.from)} pede permissão de ${scopeName(env.payload.scope)} em ${nameOf(env.to)}`
+        : `${nameOf(env.from)} pede permissão para executar ${env.action} em ${nameOf(env.to)}`);
     });
   }
 
@@ -82,15 +85,18 @@
     clearTimeout(item.timer);
     const { env } = item;
     if (!expired && remember !== 'once') {
-      const action = remember === 'action' ? env.action : remember === 'prefix' ? env.action.split('.')[0] + '.*' : '*';
-      try { Store.addRule({ from: env.from, to: env.to, action, decision: allow ? 'allow' : 'deny' }); } catch (e) { toast(e.message, 'err'); }
+      const actions = remember === 'scope'
+        ? AsafeRouter.scopePatterns(env.payload.scope, env.payload.actions)
+        : [remember === 'action' ? env.action : remember === 'prefix' ? env.action.split('.')[0] + '.*' : '*'];
+      try { actions.forEach(action => Store.addRule({ from: env.from, to: env.to, action, decision: allow ? 'allow' : 'deny' })); } catch (e) { toast(e.message, 'err'); }
     }
     record(env, allow, expired ? 'tempo' : 'sr. nathanael');
+    const what = env.kind === 'permission' ? `a permissão de ${scopeName(env.payload.scope)}` : `a execução de "${env.action}"`;
     item.resolve(allow
       ? { allow: true, waited: true }
       : expired
         ? { allow: false, code: 'permission_timeout', message: `Ninguém respondeu no Asafe a tempo ao pedido "${env.action}".` }
-        : { allow: false, code: 'denied', message: `O Sr. Nathanael recusou no Asafe a execução de "${env.action}".` });
+        : { allow: false, code: 'denied', message: `O Sr. Nathanael recusou no Asafe ${what}.` });
     if (expired) toast(`Pedido ${env.action} de ${nameOf(env.from)} expirou e foi recusado`, 'err');
     render();
     emit();
@@ -113,7 +119,45 @@
     return `${r.decision === 'allow' ? 'permitir' : 'recusar'} ${r.action === '*' ? 'tudo' : r.action} · ${n(r.from)} → ${n(r.to)}`;
   }
 
+  const SCOPE_NAME = { conversa: 'conversa', pesquisa: 'pesquisa', 'trade.leitura': 'trade (leitura)', 'trade.piloto': 'piloto automático', controle: 'controle de tela', configuracao: 'configurações', outros: 'outras funções' };
+  const scopeName = sc => SCOPE_NAME[sc] || sc;
+
+  function scopeCard(item, compact) {
+    const { env } = item;
+    const p = env.payload || {};
+    const sc = AsafeRouter.SCOPES[p.scope] || { label: 'usar' };
+    const el = h(`
+      <article class="perm-card scope ${compact ? 'compact' : ''}" data-id="${esc(env.id)}">
+        <header>
+          <span class="avatar sm ${kindOf(env.from)}">${esc(initials(nameOf(env.from)))}</span>
+          <b>${esc(nameOf(env.from))}</b><span class="perm-kind">pede permissão</span>
+          <span class="perm-timer mono"></span>
+        </header>
+        <div class="perm-action"><strong>${esc(sc.label)} ${esc(nameOf(env.to))}</strong>
+          <span>escopo <code class="mono">${esc(p.scope)}</code>${p.actions && p.actions.length ? ' · ações: ' + esc(p.actions.join(', ')) : ''}</span></div>
+        ${p.reason ? `<pre class="perm-payload">pedido do senhor: “${esc(p.reason)}”</pre>` : ''}
+        <p class="perm-note">Se aceitar, ${esc(nameOf(env.from))} pode usar ${esc(scopeName(p.scope))} de ${esc(nameOf(env.to))} sem perguntar de novo, até você retirar na lista "Permissões ativas" ou o Asafe reiniciar.</p>
+        <footer>
+          <select class="perm-remember" aria-label="Lembrar decisão">
+            <option value="once">Só agora</option>
+            <option value="scope">Sempre ${p.scope === 'outros' ? 'para estas ações' : 'para ' + esc(scopeName(p.scope))}</option>
+          </select>
+          <button class="btn danger" data-allow="0">Recusar</button>
+          <button class="btn primary" data-allow="1">Aceitar</button>
+        </footer>
+        <i class="perm-bar"></i>
+      </article>`);
+    el.addEventListener('click', e => {
+      const b = e.target.closest('[data-allow]');
+      if (!b) return;
+      el.classList.add('leaving');
+      finish(env.id, b.dataset.allow === '1', el.querySelector('.perm-remember').value);
+    });
+    return el;
+  }
+
   function card(item, compact) {
+    if (item.env.kind === 'permission') return scopeCard(item, compact);
     const { env } = item;
     const desc = descOf(env.to, env.action);
     const old = sdkOf(env.from) && sdkOf(env.from) < 2;
@@ -216,14 +260,38 @@
     hist.slice(0, 40).forEach((x, i) => list.appendChild(h(`
       <li class="${x.allow ? 'ok' : 'no'}" style="--i:${Math.min(i, 12)}">
         <span class="hist-dot"></span>
-        <span class="hist-main"><b>${x.allow ? 'Permitido' : 'Recusado'}</b> ${esc(nameOf(x.from))} → ${esc(nameOf(x.to))} · <code class="mono">${esc(x.action)}</code>
-          <small>${esc(x.by === 'regra' ? 'automático · ' + (x.rule || 'regra') : x.by === 'tempo' ? 'expirou sem resposta' : 'decidido por você')}${x.preview ? ' · ' + esc(x.preview.replace(/\s+/g, ' ').slice(0, 90)) : ''}</small></span>
+        <span class="hist-main"><b>${x.allow ? 'Permitido' : 'Recusado'}</b> ${esc(nameOf(x.from))} → ${esc(nameOf(x.to))} · <code class="mono">${esc(x.action.startsWith('permission:') ? 'permissão · ' + scopeName(x.action.slice(11)) : x.action)}</code>
+          <small>${esc(x.by === 'regra' ? 'automático · ' + (x.rule || 'regra') : x.by === 'tempo' ? 'expirou sem resposta' : x.by === 'retirada' ? 'permissão retirada por você' : 'decidido por você')}${x.preview ? ' · ' + esc(x.preview.replace(/\s+/g, ' ').slice(0, 90)) : ''}</small></span>
         <time class="mono dim" title="${fmtDate(x.t)}">${timeAgo(x.t)}</time>
       </li>`)));
   }
 
+  function renderGrants() {
+    const list = $('#permGrants');
+    if (!list) return;
+    const gs = window.Bus ? Bus.grants : [];
+    $('#grantCount').textContent = gs.length;
+    list.innerHTML = '';
+    if (!gs.length) list.appendChild(h('<li class="empty-mini">Nenhuma permissão ativa. Elas aparecem quando um agente pede acesso (permission.request) e é aceito.</li>'));
+    gs.forEach(g => {
+      const li = h(`<li class="grant">
+        <span class="grant-main"><b>${esc(nameOf(g.from))} → ${esc(nameOf(g.to))}</b>
+          <small>${esc(scopeName(g.scope))}${g.reason ? ' · “' + esc(g.reason.slice(0, 60)) + '”' : ''} · ${timeAgo(g.createdAt)}</small></span>
+        <button class="btn danger sm">Retirar</button>
+      </li>`);
+      li.querySelector('button').addEventListener('click', async () => {
+        const ok = await Bus.revoke(g.grantId);
+        if (ok) {
+          toast(`Permissão de ${scopeName(g.scope)} retirada de ${nameOf(g.from)}`);
+          try { Store.logDecision({ from: g.from, to: g.to, action: 'permission:' + g.scope, allow: false, by: 'retirada' }); } catch (e) { /* cheio */ }
+        }
+      });
+      list.appendChild(li);
+    });
+  }
+
   function render() { renderPending(); }
-  function renderAll() { renderPending(); renderPolicy(); renderHistory(); }
+  function renderAll() { renderPending(); renderPolicy(); renderHistory(); renderGrants(); }
 
   function tick() {
     const now = Date.now();
@@ -254,11 +322,13 @@
     });
     setInterval(tick, 250);
     Store.on(() => { renderPolicy(); renderHistory(); });
+    if (window.Bus) Bus.on('change', renderGrants);
+    setInterval(renderGrants, 30000);
     renderAll();
   }
 
   window.Perms = {
-    init, authorize, prompt, close, render: renderAll,
+    init, authorize, prompt, close, render: renderAll, renderGrants,
     get count() { return pending.size; },
     on(fn) { listeners.add(fn); return () => listeners.delete(fn); }
   };

@@ -686,6 +686,16 @@ textarea.code { font: 12.5px/1.6 var(--mono); }
   .perm-card footer { grid-template-columns: 1fr 1fr; }
   .perm-card footer select { grid-column: 1 / -1; }
 }
+.perm-kind { color: var(--text-2); font-size: 12.5px; }
+.perm-card.scope .perm-action strong { font-weight: 600; font-size: 14.5px; }
+.perm-note { margin: 0; font-size: 12px; color: var(--text-2); }
+.grant-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; max-height: 200px; overflow: auto; }
+.grant { display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: center; padding: 8px 8px 8px 12px; border-radius: 10px; background: linear-gradient(90deg, rgba(229,20,42,.1), rgba(255,255,255,.02)); border: 1px solid rgba(229,20,42,.3); animation: fadeUp .35s var(--ease) both; }
+.grant-main { display: grid; min-width: 0; }
+.grant-main b { font-weight: 500; font-size: 13px; }
+.grant-main small { color: var(--text-3); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.btn.sm { height: 30px; padding: 0 10px; font-size: 12px; }
+#view-perms .flow-side { overflow: auto; }
 
 </style>
 </head>
@@ -904,6 +914,11 @@ textarea.code { font: 12.5px/1.6 var(--mono); }
 
         <aside class="flow-side">
           <div class="glass panel">
+            <div class="panel-head"><h2>Permissões ativas</h2><span class="chip mono" id="grantCount">0</span></div>
+            <ul class="grant-list" id="permGrants"></ul>
+          </div>
+
+          <div class="glass panel">
             <div class="panel-head"><h2>Política padrão</h2></div>
             <div class="seg seg3" id="permDefault" role="radiogroup" aria-label="Política padrão">
               <label><input type="radio" name="permdef" value="ask" /><span>Perguntar</span></label>
@@ -1030,6 +1045,31 @@ textarea.code { font: 12.5px/1.6 var(--mono); }
     return { decision: (policy && policy.default) || 'ask', reason: 'padrão' };
   }
 
+  /* ---------- escopos (permissões pedidas pelo agente, ver PERMISSOES.md do Horácio) ---------- */
+  const SCOPES = {
+    conversa: { label: 'conversar com', patterns: ['chat.*'] },
+    pesquisa: { label: 'pesquisar na web pelo', patterns: ['research.run'] },
+    'trade.leitura': { label: 'ver e estudar o trade do', patterns: ['trade.status', 'trade.study'] },
+    'trade.piloto': { label: 'ligar ou desligar o piloto automático do', patterns: ['trade.autopilot'] },
+    controle: { label: 'operar a tela do', patterns: ['ui.*'] },
+    configuracao: { label: 'mudar as configurações do', patterns: ['settings.*'] },
+    outros: { label: 'usar outras funções do', patterns: [] }
+  };
+  function scopeOf(action) {
+    if (/^chat\./.test(action)) return 'conversa';
+    if (action === 'research.run') return 'pesquisa';
+    if (action === 'trade.status' || action === 'trade.study') return 'trade.leitura';
+    if (action === 'trade.autopilot') return 'trade.piloto';
+    if (/^ui\./.test(action)) return 'controle';
+    if (/^settings\./.test(action)) return 'configuracao';
+    return 'outros';
+  }
+  /** Padrões de ação que um escopo cobre (para regras); "outros" usa as ações pedidas. */
+  function scopePatterns(scope, actions) {
+    const s = SCOPES[scope];
+    return s && s.patterns.length ? s.patterns : (actions && actions.length ? actions : ['*']);
+  }
+
   /**
    * Cria um roteador.
    * @param {object} o
@@ -1039,9 +1079,15 @@ textarea.code { font: 12.5px/1.6 var(--mono); }
    * @param {(env:object, path:string[]) => Promise<{allow:boolean, message?:string, code?:string}>} [o.authorize]
    *        permissão de execução: chamada para cada request entre agentes; sem ela, tudo é entregue
    * @param {number} [o.permissionWait]  quanto tempo (ms) o remetente deve esperar pela decisão
+   * @param {() => object} [o.policy]  política atual { default, rules }
+   * @param {(env:object) => Promise<{allow:boolean, message?:string}>} [o.ask]  pergunta ao Sr. Nathanael (permission.request)
+   * @param {() => void} [o.onGrants]  avisado quando as permissões ativas mudam
    */
-  function createRouter({ topology, deliver, onTraffic = () => {}, authorize = null, permissionWait = 60000 }) {
+  function createRouter({ topology, deliver, onTraffic = () => {}, authorize = null, permissionWait = 60000, policy = () => null, ask = null, onGrants = () => {} }) {
     const online = new Map(); // id -> { name, role, kind, actions, since, seen }
+    let grants = []; // { grantId, from, to, scope, actions, reason, createdAt, expiresAt }
+    const validGrant = g => !g.expiresAt || g.expiresAt > Date.now();
+    const findGrant = (from, to, scope) => grants.find(g => g.from === from && g.to === to && g.scope === scope && validGrant(g));
 
     const reply = (req, ok, payload, error) => ({
       asafe: VERSION, id: uid(), type: 'response', from: CORE, to: req.from,
@@ -1069,15 +1115,81 @@ textarea.code { font: 12.5px/1.6 var(--mono); }
       });
     }
 
+    /* ---------- permissões por escopo (permission.*) ---------- */
+    function grant(from, to, scope, actions, reason) {
+      const g = { grantId: uid().replace('msg_', 'grant_'), from, to, scope, actions: actions || [], reason: reason || '', createdAt: Date.now(), expiresAt: null };
+      grants = grants.filter(x => !(x.from === from && x.to === to && x.scope === scope)).concat(g);
+      onGrants();
+      return g;
+    }
+
+    async function permissionRequest(env) {
+      const p = env.payload || {};
+      const to = String(p.to || ''), scope = String(p.scope || '');
+      const topo = topology();
+      if (!topo.agents.some(a => a.id === to)) throw Object.assign(new Error(`"${to}" não está cadastrado no Asafe.`), { code: 'unknown_agent' });
+      if (!SCOPES[scope]) throw Object.assign(new Error(`Escopo desconhecido: "${scope}".`), { code: 'bad_request' });
+      const existing = findGrant(env.from, to, scope);
+      const answer = g => ({ granted: true, to, scope, grantId: g.grantId, expiresAt: g.expiresAt || undefined });
+      if (existing) return answer(existing);
+
+      // a política decide pelos padrões do escopo: todos permitidos → concede; algum recusado → nega
+      const pats = scopePatterns(scope, p.actions);
+      const ds = pats.map(a => decide(policy(), { from: env.from, to, action: a }).decision);
+      let allow;
+      if (ds.includes('deny')) allow = false;
+      else if (ds.every(d => d === 'allow')) allow = true;
+      else if (!ask) allow = false;
+      else {
+        const res = await ask({
+          asafe: VERSION, id: env.id, type: 'request', kind: 'permission', from: env.from, to,
+          action: 'permission:' + scope, payload: { scope, actions: p.actions || [], reason: p.reason || '' }, ts: Date.now()
+        });
+        if (res === null) return null; // decidido em outro lugar
+        allow = !!(res && res.allow);
+        if (!allow) throw Object.assign(new Error((res && res.message) || `O Sr. Nathanael recusou a permissão de ${scope}.`), { code: (res && res.code) || 'denied' });
+      }
+      if (!allow) throw Object.assign(new Error(`O Asafe recusou a permissão de ${scope} por uma regra.`), { code: 'denied' });
+      return answer(grant(env.from, to, scope, p.actions, p.reason));
+    }
+
+    function release(from, to, scope) {
+      const before = grants.length;
+      grants = grants.filter(g => !(g.from === from && (!to || g.to === to) && (!scope || g.scope === scope)));
+      const n = before - grants.length;
+      if (n) onGrants();
+      return n;
+    }
+
+    /** O Sr. Nathanael retira uma permissão: avisa o agente com permission.revoked. */
+    function revoke(grantId) {
+      const g = grants.find(x => x.grantId === grantId);
+      if (!g) return false;
+      grants = grants.filter(x => x !== g);
+      onGrants();
+      const ev = { asafe: VERSION, id: uid(), type: 'event', from: CORE, to: g.from, action: 'permission.revoked', payload: { to: g.to, scope: g.scope }, ts: Date.now(), via: CORE };
+      deliver(ev);
+      onTraffic(ev, { status: 'ok', route: [CORE, g.from] });
+      return true;
+    }
+
+    const CORE_ACTIONS = {
+      ping: () => ({ pong: true, ts: Date.now() }),
+      roster: () => ({ agents: roster() }),
+      'permission.request': permissionRequest,
+      'permission.release': env => ({ released: release(env.from, (env.payload || {}).to, (env.payload || {}).scope) }),
+      'permission.list': env => ({ grants: grants.filter(g => g.from === env.from && validGrant(g)).map(g => ({ to: g.to, scope: g.scope, grantId: g.grantId, expiresAt: g.expiresAt || undefined })) })
+    };
+
     function handleCore(env) {
       if (env.type !== 'request') return { ok: true };
-      let payload;
-      if (env.action === 'ping') payload = { pong: true, ts: Date.now() };
-      else if (env.action === 'roster') payload = { agents: roster() };
-      else return fail(env, 'unknown_action', `O Asafe não conhece a ação "${env.action}".`);
-      const r = reply(env, true, payload);
-      deliver(r);
-      onTraffic(env, { status: 'ok', route: [env.from, CORE] });
+      const fn = CORE_ACTIONS[env.action];
+      if (!fn) return fail(env, 'unknown_action', `O Asafe não conhece a ação "${env.action}".`);
+      Promise.resolve().then(() => fn(env)).then(payload => {
+        if (payload === null) return;
+        deliver(reply(env, true, payload));
+        onTraffic(env, { status: 'ok', route: [env.from, CORE] });
+      }).catch(e => fail(env, e.code || 'error', e.message || String(e)));
       return { ok: true };
     }
 
@@ -1115,6 +1227,8 @@ textarea.code { font: 12.5px/1.6 var(--mono); }
       if (!path) return fail(env, 'no_route', `Não existe linha de servidor entre ${env.from} e ${env.to}.`);
       if (!online.has(env.to)) return fail(env, 'offline', `${env.to} está desconectado do Asafe agora (abra a interface dele).`);
 
+      // permissão ativa do escopo (pedida antes com permission.request): passa direto
+      if (env.type === 'request' && findGrant(env.from, env.to, scopeOf(env.action))) return forward(env, path);
       if (env.type === 'request' && authorize) return gate(env, path);
       return forward(env, path);
     }
@@ -1160,10 +1274,14 @@ textarea.code { font: 12.5px/1.6 var(--mono); }
       return changed;
     }
 
-    return { route, roster, sweep, online, findPath: (a, b) => findPath(topology(), a, b) };
+    return {
+      route, roster, sweep, online, revoke, release,
+      get grants() { return grants.filter(validGrant); },
+      findPath: (a, b) => findPath(topology(), a, b)
+    };
   }
 
-  return { VERSION, CORE, uid, slug, validate, findPath, createRouter, decide, isExempt, ruleMatches };
+  return { VERSION, CORE, uid, slug, validate, findPath, createRouter, decide, isExempt, ruleMatches, SCOPES, scopeOf, scopePatterns };
 });
 
 </script>
@@ -2665,6 +2783,7 @@ textarea.code { font: 12.5px/1.6 var(--mono); }
 
   function preview(env) {
     const p = env.payload || {};
+    if (env.kind === 'permission') return p.reason ? `“${p.reason}”` : `escopo ${p.scope}`;
     const text = p.prompt || p.query || p.text;
     let out = text ? String(text) : JSON.stringify(p, null, 1);
     if (text && Object.keys(p).length > 1) {
@@ -2708,7 +2827,9 @@ textarea.code { font: 12.5px/1.6 var(--mono); }
       pending.set(env.id, item);
       render();
       emit();
-      toast(`${nameOf(env.from)} pede permissão para executar ${env.action} em ${nameOf(env.to)}`);
+      toast(env.kind === 'permission'
+        ? `${nameOf(env.from)} pede permissão de ${scopeName(env.payload.scope)} em ${nameOf(env.to)}`
+        : `${nameOf(env.from)} pede permissão para executar ${env.action} em ${nameOf(env.to)}`);
     });
   }
 
@@ -2719,15 +2840,18 @@ textarea.code { font: 12.5px/1.6 var(--mono); }
     clearTimeout(item.timer);
     const { env } = item;
     if (!expired && remember !== 'once') {
-      const action = remember === 'action' ? env.action : remember === 'prefix' ? env.action.split('.')[0] + '.*' : '*';
-      try { Store.addRule({ from: env.from, to: env.to, action, decision: allow ? 'allow' : 'deny' }); } catch (e) { toast(e.message, 'err'); }
+      const actions = remember === 'scope'
+        ? AsafeRouter.scopePatterns(env.payload.scope, env.payload.actions)
+        : [remember === 'action' ? env.action : remember === 'prefix' ? env.action.split('.')[0] + '.*' : '*'];
+      try { actions.forEach(action => Store.addRule({ from: env.from, to: env.to, action, decision: allow ? 'allow' : 'deny' })); } catch (e) { toast(e.message, 'err'); }
     }
     record(env, allow, expired ? 'tempo' : 'sr. nathanael');
+    const what = env.kind === 'permission' ? `a permissão de ${scopeName(env.payload.scope)}` : `a execução de "${env.action}"`;
     item.resolve(allow
       ? { allow: true, waited: true }
       : expired
         ? { allow: false, code: 'permission_timeout', message: `Ninguém respondeu no Asafe a tempo ao pedido "${env.action}".` }
-        : { allow: false, code: 'denied', message: `O Sr. Nathanael recusou no Asafe a execução de "${env.action}".` });
+        : { allow: false, code: 'denied', message: `O Sr. Nathanael recusou no Asafe ${what}.` });
     if (expired) toast(`Pedido ${env.action} de ${nameOf(env.from)} expirou e foi recusado`, 'err');
     render();
     emit();
@@ -2750,7 +2874,45 @@ textarea.code { font: 12.5px/1.6 var(--mono); }
     return `${r.decision === 'allow' ? 'permitir' : 'recusar'} ${r.action === '*' ? 'tudo' : r.action} · ${n(r.from)} → ${n(r.to)}`;
   }
 
+  const SCOPE_NAME = { conversa: 'conversa', pesquisa: 'pesquisa', 'trade.leitura': 'trade (leitura)', 'trade.piloto': 'piloto automático', controle: 'controle de tela', configuracao: 'configurações', outros: 'outras funções' };
+  const scopeName = sc => SCOPE_NAME[sc] || sc;
+
+  function scopeCard(item, compact) {
+    const { env } = item;
+    const p = env.payload || {};
+    const sc = AsafeRouter.SCOPES[p.scope] || { label: 'usar' };
+    const el = h(`
+      <article class="perm-card scope ${compact ? 'compact' : ''}" data-id="${esc(env.id)}">
+        <header>
+          <span class="avatar sm ${kindOf(env.from)}">${esc(initials(nameOf(env.from)))}</span>
+          <b>${esc(nameOf(env.from))}</b><span class="perm-kind">pede permissão</span>
+          <span class="perm-timer mono"></span>
+        </header>
+        <div class="perm-action"><strong>${esc(sc.label)} ${esc(nameOf(env.to))}</strong>
+          <span>escopo <code class="mono">${esc(p.scope)}</code>${p.actions && p.actions.length ? ' · ações: ' + esc(p.actions.join(', ')) : ''}</span></div>
+        ${p.reason ? `<pre class="perm-payload">pedido do senhor: “${esc(p.reason)}”</pre>` : ''}
+        <p class="perm-note">Se aceitar, ${esc(nameOf(env.from))} pode usar ${esc(scopeName(p.scope))} de ${esc(nameOf(env.to))} sem perguntar de novo, até você retirar na lista "Permissões ativas" ou o Asafe reiniciar.</p>
+        <footer>
+          <select class="perm-remember" aria-label="Lembrar decisão">
+            <option value="once">Só agora</option>
+            <option value="scope">Sempre ${p.scope === 'outros' ? 'para estas ações' : 'para ' + esc(scopeName(p.scope))}</option>
+          </select>
+          <button class="btn danger" data-allow="0">Recusar</button>
+          <button class="btn primary" data-allow="1">Aceitar</button>
+        </footer>
+        <i class="perm-bar"></i>
+      </article>`);
+    el.addEventListener('click', e => {
+      const b = e.target.closest('[data-allow]');
+      if (!b) return;
+      el.classList.add('leaving');
+      finish(env.id, b.dataset.allow === '1', el.querySelector('.perm-remember').value);
+    });
+    return el;
+  }
+
   function card(item, compact) {
+    if (item.env.kind === 'permission') return scopeCard(item, compact);
     const { env } = item;
     const desc = descOf(env.to, env.action);
     const old = sdkOf(env.from) && sdkOf(env.from) < 2;
@@ -2853,14 +3015,38 @@ textarea.code { font: 12.5px/1.6 var(--mono); }
     hist.slice(0, 40).forEach((x, i) => list.appendChild(h(`
       <li class="${x.allow ? 'ok' : 'no'}" style="--i:${Math.min(i, 12)}">
         <span class="hist-dot"></span>
-        <span class="hist-main"><b>${x.allow ? 'Permitido' : 'Recusado'}</b> ${esc(nameOf(x.from))} → ${esc(nameOf(x.to))} · <code class="mono">${esc(x.action)}</code>
-          <small>${esc(x.by === 'regra' ? 'automático · ' + (x.rule || 'regra') : x.by === 'tempo' ? 'expirou sem resposta' : 'decidido por você')}${x.preview ? ' · ' + esc(x.preview.replace(/\s+/g, ' ').slice(0, 90)) : ''}</small></span>
+        <span class="hist-main"><b>${x.allow ? 'Permitido' : 'Recusado'}</b> ${esc(nameOf(x.from))} → ${esc(nameOf(x.to))} · <code class="mono">${esc(x.action.startsWith('permission:') ? 'permissão · ' + scopeName(x.action.slice(11)) : x.action)}</code>
+          <small>${esc(x.by === 'regra' ? 'automático · ' + (x.rule || 'regra') : x.by === 'tempo' ? 'expirou sem resposta' : x.by === 'retirada' ? 'permissão retirada por você' : 'decidido por você')}${x.preview ? ' · ' + esc(x.preview.replace(/\s+/g, ' ').slice(0, 90)) : ''}</small></span>
         <time class="mono dim" title="${fmtDate(x.t)}">${timeAgo(x.t)}</time>
       </li>`)));
   }
 
+  function renderGrants() {
+    const list = $('#permGrants');
+    if (!list) return;
+    const gs = window.Bus ? Bus.grants : [];
+    $('#grantCount').textContent = gs.length;
+    list.innerHTML = '';
+    if (!gs.length) list.appendChild(h('<li class="empty-mini">Nenhuma permissão ativa. Elas aparecem quando um agente pede acesso (permission.request) e é aceito.</li>'));
+    gs.forEach(g => {
+      const li = h(`<li class="grant">
+        <span class="grant-main"><b>${esc(nameOf(g.from))} → ${esc(nameOf(g.to))}</b>
+          <small>${esc(scopeName(g.scope))}${g.reason ? ' · “' + esc(g.reason.slice(0, 60)) + '”' : ''} · ${timeAgo(g.createdAt)}</small></span>
+        <button class="btn danger sm">Retirar</button>
+      </li>`);
+      li.querySelector('button').addEventListener('click', async () => {
+        const ok = await Bus.revoke(g.grantId);
+        if (ok) {
+          toast(`Permissão de ${scopeName(g.scope)} retirada de ${nameOf(g.from)}`);
+          try { Store.logDecision({ from: g.from, to: g.to, action: 'permission:' + g.scope, allow: false, by: 'retirada' }); } catch (e) { /* cheio */ }
+        }
+      });
+      list.appendChild(li);
+    });
+  }
+
   function render() { renderPending(); }
-  function renderAll() { renderPending(); renderPolicy(); renderHistory(); }
+  function renderAll() { renderPending(); renderPolicy(); renderHistory(); renderGrants(); }
 
   function tick() {
     const now = Date.now();
@@ -2891,11 +3077,13 @@ textarea.code { font: 12.5px/1.6 var(--mono); }
     });
     setInterval(tick, 250);
     Store.on(() => { renderPolicy(); renderHistory(); });
+    if (window.Bus) Bus.on('change', renderGrants);
+    setInterval(renderGrants, 30000);
     renderAll();
   }
 
   window.Perms = {
-    init, authorize, prompt, close, render: renderAll,
+    init, authorize, prompt, close, render: renderAll, renderGrants,
     get count() { return pending.size; },
     on(fn) { listeners.add(fn); return () => listeners.delete(fn); }
   };
@@ -2923,6 +3111,7 @@ textarea.code { font: 12.5px/1.6 var(--mono); }
   let server = null;
   let roster = [];
   let router = null;
+  let serverGrants = [];
 
   function serverUrl() {
     try { return localStorage.getItem(SERVER_KEY) || DEFAULT_SERVER; } catch (e) { return DEFAULT_SERVER; }
@@ -3003,6 +3192,7 @@ textarea.code { font: 12.5px/1.6 var(--mono); }
         });
       }
       if (m.kind === 'permission-closed') Perms.close(m.id);
+      if (m.grants) { serverGrants = m.grants; emit('change'); }
     };
     es.onerror = () => { roster = []; emit('change'); };
     es.onopen = () => { pushTopology(); emit('change'); };
@@ -3017,6 +3207,9 @@ textarea.code { font: 12.5px/1.6 var(--mono); }
       topology,
       deliver: env => bc.postMessage({ dir: 'down', env }),
       authorize: (env, path) => Perms.authorize(env, path),
+      policy: () => Store.state.permissions,
+      ask: env => Perms.prompt(env),
+      onGrants: () => emit('change'),
       onTraffic: (env, info) => {
         if (info.status === 'presence') { roster = router.roster(); emit('change'); return; }
         record(env, info);
@@ -3056,6 +3249,14 @@ textarea.code { font: 12.5px/1.6 var(--mono); }
     get mode() { return mode; },
     get server() { return server; },
     get roster() { return roster; },
+    /** Permissões ativas (concedidas por permission.request). */
+    get grants() { return mode === 'server' ? serverGrants : router ? router.grants : []; },
+    revoke(grantId) {
+      if (mode === 'server') {
+        return fetch(server + '/revoke', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ grantId }) }).then(r => r.json()).then(r => r.ok);
+      }
+      return Promise.resolve(router ? router.revoke(grantId) : false);
+    },
     onlineIds,
     isOnline: agentId => onlineIds().has(slug(Store.nameOf(agentId))),
     slugOf: agentId => agentId === CORE ? CORE : slug(Store.nameOf(agentId)),

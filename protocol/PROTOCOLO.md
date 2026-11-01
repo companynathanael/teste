@@ -67,14 +67,17 @@ O Asafe só entrega um pedido quando:
 3. existe caminho de linhas entre elas (`no_route`);
 4. o destino está com a interface aberta e conectada (`offline`).
 
-Caso contrário, o próprio Asafe responde ao remetente com `ok: false` e o código entre parênteses. Outros códigos: `denied`, `permission_timeout`, `no_supervisor` (permissões, seção 5), `timeout`, `unknown_action`, `busy`, `not_ready`, `bad_request`, `model_error`.
+Caso contrário, o próprio Asafe responde ao remetente com `ok: false` e o código entre parênteses. Outros códigos: `denied`, `permission_timeout`, `no_supervisor` (permissões, seção 5), `not_understood`, `timeout`, `unknown_action`, `busy`, `not_ready`, `bad_request`, `model_error`.
 
 Ações do próprio núcleo (`to: "asafe"`):
 
-| Ação | Resposta |
-| --- | --- |
-| `ping` | `{ pong: true, ts }` |
-| `roster` | `{ agents: [{ id, name, kind, online, actions, route }] }` |
+| Ação | payload | Resposta |
+| --- | --- | --- |
+| `ping` | `{}` | `{ pong: true, ts }` |
+| `roster` | `{}` | `{ agents: [{ id, name, kind, online, actions, route, sdk }] }` |
+| `permission.request` | `{ to, scope, actions, reason }` | `{ granted: true, to, scope, grantId }` ou erro `denied` (ver seção 5) |
+| `permission.release` | `{ to?, scope? }` | `{ released: n }` |
+| `permission.list` | `{}` | `{ grants: [{ to, scope, grantId }] }` |
 
 ## 4. Ações publicadas
 
@@ -91,6 +94,12 @@ Ações do próprio núcleo (`to: "asafe"`):
 | `trade.status` | `{}` | `{ equity, cash, start, returnPct, position, trades, autopilot: { on, mode, strategy, symbol }, lessonsStudied, lastStudy, journal }` (journal = 10 últimas entradas) |
 | `trade.study` | `{}` | `{ ranking: [{ strategy, avgReturnPct }], insights, source }`. Testa 3 estratégias em BTC/ETH/SOL (1h e 4h); leva de 10 a 60 s |
 | `trade.autopilot` | `{ on = true, strategy?: "cruzamento" \| "rsi" \| "rompimento", symbol?: "BTCUSDT" \| "ETHUSDT" \| "SOLUSDT", mode?: "replay" \| "live" }` | `{ on, strategy, mode, symbol, source }` ou `{ on: false }` |
+
+| `agent.manual` | `{}` | `{ app, tips, screens: [{ id, desc, elements: [{ name, role, protected? }] }], intents: [{ id, desc, example, protected }] }`: o manual da tela, com os nomes estáveis (`data-asafe-name`) |
+| `agent.do` | `{ goal, confirm? }` | `{ done, intent, steps: [{ step, ok, detail }], result, data }`: o Miquéias executa sozinho um objetivo em português. Erros: `needs_confirmation`, `not_understood`, `not_ready`, `rejected` |
+| `agent.say` | `{ text }` | `{ reply }`: conversa com o núcleo do Miquéias (painel "Núcleo"). Se o texto for uma ordem, ele executa com as mesmas proteções |
+
+Os erros `not_found` e `ambiguous` dos `ui.*` no Miquéias trazem nomes parecidos e a dica de usar `agent.do`.
 
 O pedido de `chat.ask` e `research.run` aparece na interface do Miquéias como uma conversa nova chamada `⇄ Horácio: …`. As ações `trade.*` operam o **Laboratório de Trade** do Miquéias, sempre com **dinheiro fictício**.
 
@@ -132,6 +141,25 @@ Todo `request` de um agente para outro (ex.: Horácio → Miquéias) passa pela 
 Nunca precisam de permissão: `ping` e `ui.control { on: false }` (parar um controle de tela).
 
 **SDK:** o `asafe-link.js` atual (hello com `sdk: 2`) pausa o prazo do pedido enquanto ele espera permissão e avisa a página por `link.on("permission", ({ id, state, action }) => …)`. Com a versão antiga, o prazo continua correndo: um pedido com prazo curto (ex.: `trade.status`, 20 s) pode expirar no remetente antes da decisão. Por isso, atualize a cópia do `asafe-link.js` em cada agente.
+
+### Permissões por escopo (`permission.request`)
+
+O agente pode pedir permissão **antes** de usar outro agente, uma vez por agente e por escopo. O Horácio faz isso sempre e, se o Asafe não tiver o sistema, não executa o pedido. Especificação do lado do Horácio: `docs/PERMISSOES.md` em companynathanael/Hor-cio-Jarvis.
+
+| Escopo | Ações |
+| --- | --- |
+| `conversa` | `chat.*` |
+| `pesquisa` | `research.run` |
+| `trade.leitura` | `trade.status`, `trade.study` |
+| `trade.piloto` | `trade.autopilot` |
+| `controle` | `ui.*` |
+| `configuracao` | `settings.*` |
+| `outros` | qualquer outra ação (ex.: `agent.*`, `notify`) |
+
+1. `permission.request { to, scope, actions, reason }`: o Asafe aplica as regras aos padrões do escopo. Se todos estiverem permitidos, concede; se algum estiver recusado, nega com `denied`; se não, mostra o cartão **"pede permissão"**, com o motivo (`reason`, a frase original do Sr. Nathanael), e segura a resposta até a decisão (até 2 min). Ao aceitar dá para escolher **"Sempre para o escopo"**, que vira regra.
+2. A permissão concedida (`grantId`) vale até ser retirada ou o Asafe reiniciar. Enquanto valer, os pedidos daquele agente para aquele escopo **passam direto**, sem novo cartão.
+3. Na lista **Permissões ativas**, o botão **Retirar** remove a permissão e envia ao agente o evento `permission.revoked { to, scope }`.
+4. Pedidos sem permissão de escopo continuam passando pela aprovação de cada pedido, descrita acima.
 
 Todas as decisões ficam no **histórico** da aba Permissões: quem pediu, o quê e se foi você, uma regra ou o tempo que decidiu.
 

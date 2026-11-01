@@ -30,6 +30,18 @@ const PERMISSION_WAIT = 60000;
 const waiting = new Map(); // id do pedido -> { resolve, timer }
 
 /** Permissão de execução: política salva ou pergunta à interface do Asafe. */
+/** permission.request no modo "perguntar": a interface do Asafe decide. */
+function askSupervisor(env) {
+  if (!observers.size) {
+    return Promise.resolve({ allow: false, code: 'no_supervisor', message: 'A permissão precisa ser aprovada, mas a interface do Asafe não está aberta.' });
+  }
+  return new Promise(resolve => {
+    const timer = setTimeout(() => settleDecision(env.id, { allow: false, code: 'permission_timeout', message: 'Ninguém respondeu no Asafe a tempo ao pedido de permissão.' }), 120000);
+    waiting.set(env.id, { resolve, timer });
+    for (const res of observers) sse(res, { kind: 'permission', env, path: [env.from, CORE], timeoutMs: 118000 });
+  });
+}
+
 function authorize(env, path) {
   const d = decide(topology.policy, env);
   if (d.decision === 'allow') return Promise.resolve({ allow: true });
@@ -66,6 +78,9 @@ const router = createRouter({
   topology: () => topology,
   authorize,
   permissionWait: PERMISSION_WAIT,
+  policy: () => topology.policy,
+  ask: askSupervisor,
+  onGrants: () => { for (const res of observers) sse(res, { kind: 'grants', grants: router.grants }); },
   deliver(env) {
     for (const res of streams.get(env.to) || []) sse(res, env);
   },
@@ -144,7 +159,7 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'GET' && url.pathname === '/observe') {
       openStream(req, res);
       observers.add(res);
-      sse(res, { kind: 'presence', roster: router.roster() });
+      sse(res, { kind: 'presence', roster: router.roster(), grants: router.grants });
       req.on('close', () => observers.delete(res));
       return;
     }
@@ -164,6 +179,11 @@ const server = http.createServer(async (req, res) => {
         ? { allow: true }
         : { allow: false, code: d.code || 'denied', message: d.message || 'O Sr. Nathanael recusou no Asafe.' });
       return json(res, ok ? 200 : 404, { ok, message: ok ? undefined : 'pedido inexistente ou já decidido' });
+    }
+
+    if (req.method === 'POST' && url.pathname === '/revoke') {
+      const d = await readBody(req);
+      return json(res, 200, { ok: router.revoke(d.grantId) });
     }
 
     json(res, 404, { ok: false, message: 'rota inexistente' });
