@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Asafe · Agente de Servidores</title>
+  <meta name="description" content="Asafe — agente de servidores que conecta e armazena os dados de todas as IAs." />
+  <link rel="icon" type="image/png" href="assets/favicon.png" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+  <!-- Fundo -->
+  <div class="bg" aria-hidden="true">
+    <div class="bg-grid"></div>
+    <div class="bg-orb orb-a"></div>
+    <div class="bg-orb orb-b"></div>
+    <div class="bg-vignette"></div>
+  </div>
+
+  <!-- Boot -->
+  <div id="boot" class="boot" aria-hidden="true">
+    <div class="boot-core">
+      <div class="boot-ring r1"></div>
+      <div class="boot-ring r2"></div>
+      <img class="boot-mark" src="assets/asafe-mark-red.png" alt="" />
+    </div>
+    <img class="boot-logo" src="assets/asafe-logo.png" alt="asafe" />
+    <div class="boot-status">
+      <span id="bootText">inicializando núcleo de servidores</span>
+      <div class="boot-bar"><i></i></div>
+    </div>
+  </div>
+
+  <div class="app" id="app">
+    <!-- Topo -->
+    <header class="topbar glass">
+      <div class="brand">
+        <img src="assets/asafe-logo.png" alt="asafe" class="brand-logo" />
+        <span class="brand-tag">agente de servidores</span>
+      </div>
+
+      <nav class="tabs" role="tablist" aria-label="Seções do Asafe">
+        <span class="tab-indicator" id="tabIndicator"></span>
+        <button class="tab is-active" role="tab" data-tab="data" aria-selected="true">
+          <svg viewBox="0 0 24 24"><path d="M4 6c0-1.7 3.6-3 8-3s8 1.3 8 3-3.6 3-8 3-8-1.3-8-3Z"/><path d="M4 6v6c0 1.7 3.6 3 8 3s8-1.3 8-3V6"/><path d="M4 12v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6"/></svg>
+          Dados de Servidores
+        </button>
+        <button class="tab" role="tab" data-tab="flow" aria-selected="false">
+          <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><circle cx="4" cy="5" r="2"/><circle cx="20" cy="5" r="2"/><circle cx="4" cy="19" r="2"/><circle cx="20" cy="19" r="2"/><path d="M6 6l4 4M18 6l-4 4M6 18l4-4M18 18l-4-4"/></svg>
+          Linhas de Conexão
+        </button>
+      </nav>
+
+      <div class="top-stats">
+        <div class="stat"><b id="statNodes">0</b><span>nós</span></div>
+        <div class="stat"><b id="statLinks">0</b><span>linhas</span></div>
+        <div class="stat"><b id="statData">0 B</b><span>dados</span></div>
+        <div class="core-status"><i class="pulse"></i><span>núcleo online</span><time id="clock">--:--:--</time></div>
+        <div class="top-actions">
+          <button class="icon-btn" id="btnExport" title="Exportar backup do Asafe">
+            <svg viewBox="0 0 24 24"><path d="M12 3v12M7 10l5 5 5-5M4 21h16"/></svg>
+          </button>
+          <button class="icon-btn" id="btnImport" title="Importar backup">
+            <svg viewBox="0 0 24 24"><path d="M12 15V3M7 8l5-5 5 5M4 21h16"/></svg>
+          </button>
+          <input type="file" id="importInput" accept="application/json" hidden />
+        </div>
+      </div>
+    </header>
+
+    <main class="views">
+      <!-- ============ ABA 1: DADOS DE SERVIDORES ============ -->
+      <section class="view is-active" id="view-data" role="tabpanel">
+        <aside class="servers glass">
+          <div class="panel-head">
+            <h2>Servidores</h2>
+            <span class="chip mono" id="serverCount">0</span>
+          </div>
+
+          <button class="core-card" id="coreCard">
+            <img src="assets/asafe-mark-red.png" alt="" />
+            <div>
+              <strong>Núcleo Asafe</strong>
+              <small id="coreSummary">—</small>
+            </div>
+          </button>
+
+          <div class="search">
+            <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+            <input id="serverSearch" placeholder="Filtrar IAs…" />
+          </div>
+
+          <ul class="server-list" id="serverList"></ul>
+
+          <div class="storage">
+            <div class="storage-row"><span>Armazenamento</span><span class="mono" id="storageText">—</span></div>
+            <div class="meter"><i id="storageBar"></i></div>
+          </div>
+        </aside>
+
+        <section class="explorer glass">
+          <img class="explorer-watermark" src="assets/asafe-mark.png" alt="" aria-hidden="true" />
+          <div class="explorer-head">
+            <nav class="crumbs" id="crumbs"></nav>
+            <div class="explorer-actions">
+              <div class="search small">
+                <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+                <input id="fileSearch" placeholder="Buscar arquivos…" />
+              </div>
+              <button class="btn ghost" id="btnNewFolder">
+                <svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/><path d="M12 11v5M9.5 13.5h5"/></svg>
+                Pasta
+              </button>
+              <button class="btn ghost" id="btnNewNote">
+                <svg viewBox="0 0 24 24"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9Z"/><path d="M14 3v6h6M12 12v6M9 15h6"/></svg>
+                Registro
+              </button>
+              <button class="btn primary" id="btnUpload">
+                <svg viewBox="0 0 24 24"><path d="M12 16V4M7 9l5-5 5 5M4 20h16"/></svg>
+                Enviar
+              </button>
+              <input type="file" id="uploadInput" multiple hidden />
+            </div>
+          </div>
+
+          <div class="explorer-body" id="explorerBody"></div>
+
+          <div class="dropzone" id="dropzone">
+            <div><img src="assets/asafe-mark-red.png" alt="" /><p>Solte os arquivos para armazenar no Asafe</p></div>
+          </div>
+        </section>
+      </section>
+
+      <!-- ============ ABA 2: LINHAS DE CONEXÃO ============ -->
+      <section class="view" id="view-flow" role="tabpanel">
+        <div class="flow-wrap glass">
+          <div class="flow-viewport" id="flowViewport">
+            <div class="flow-world" id="flowWorld">
+              <svg class="flow-links" id="flowLinks" width="1" height="1">
+                <defs>
+                  <linearGradient id="lineGrad" gradientUnits="userSpaceOnUse">
+                    <stop offset="0" stop-color="#ff2a3d" />
+                    <stop offset="1" stop-color="#7a0b16" />
+                  </linearGradient>
+                  <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+                    <feGaussianBlur stdDeviation="3" result="b" />
+                    <feMerge><feMergeNode in="b" /><feMergeNode in="SourceGraphic" /></feMerge>
+                  </filter>
+                </defs>
+                <g id="linkLayer"></g>
+                <path id="tempLink" class="temp-link" d="" />
+                <g id="packetLayer"></g>
+              </svg>
+              <div id="nodeLayer"></div>
+            </div>
+          </div>
+
+          <div class="flow-hint glass-soft" id="flowHint">
+            Arraste do <b>conector</b> <i class="port-demo"></i> de um nó até outro para criar uma linha de servidor.
+          </div>
+
+          <div class="flow-tools glass-soft">
+            <button class="icon-btn" id="zoomIn" title="Aproximar"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></button>
+            <span class="mono" id="zoomLabel">100%</span>
+            <button class="icon-btn" id="zoomOut" title="Afastar"><svg viewBox="0 0 24 24"><path d="M5 12h14"/></svg></button>
+            <button class="icon-btn" id="zoomFit" title="Centralizar no Asafe"><svg viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/><circle cx="12" cy="12" r="2"/></svg></button>
+            <button class="icon-btn" id="autoLayout" title="Organizar ao redor do Asafe"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="2.5"/><circle cx="12" cy="12" r="8" stroke-dasharray="3 3"/></svg></button>
+          </div>
+        </div>
+
+        <aside class="flow-side">
+          <div class="glass panel">
+            <div class="panel-head"><h2>Adicionar IA</h2></div>
+            <form id="addAgentForm" class="form" autocomplete="off">
+              <label>Nome
+                <input name="name" required maxlength="32" placeholder="ex.: Miqueias" />
+              </label>
+              <label>Função
+                <input name="role" maxlength="48" placeholder="ex.: Análise de dados" />
+              </label>
+              <div class="seg" role="radiogroup" aria-label="Tipo">
+                <label><input type="radio" name="kind" value="ia" checked /><span>IA auxiliar</span></label>
+                <label><input type="radio" name="kind" value="principal" /><span>Agente principal</span></label>
+              </div>
+              <label class="check"><input type="checkbox" name="autolink" checked /> <span>Conectar direto ao Asafe</span></label>
+              <button class="btn primary block" type="submit">
+                <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
+                Adicionar à rede
+              </button>
+            </form>
+          </div>
+
+          <div class="glass panel grow">
+            <div class="panel-head" id="inspectorHead"><h2>Rede</h2><span class="chip mono" id="routeChip">—</span></div>
+            <div id="inspector" class="inspector"></div>
+          </div>
+        </aside>
+      </section>
+    </main>
+  </div>
+
+  <!-- Modal -->
+  <div class="modal" id="modal" hidden>
+    <div class="modal-backdrop" data-close></div>
+    <div class="modal-card glass" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+      <header class="modal-head">
+        <h3 id="modalTitle"></h3>
+        <button class="icon-btn" data-close title="Fechar"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
+      </header>
+      <div class="modal-body" id="modalBody"></div>
+      <footer class="modal-foot" id="modalFoot"></footer>
+    </div>
+  </div>
+
+  <div class="toasts" id="toasts" aria-live="polite"></div>
+
+  <script src="js/store.js"></script>
+  <script src="js/ui.js"></script>
+  <script src="js/data.js"></script>
+  <script src="js/flow.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
