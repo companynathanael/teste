@@ -148,13 +148,13 @@ O agente pode pedir permissão **antes** de usar outro agente, uma vez por agent
 
 | Escopo | Ações |
 | --- | --- |
-| `conversa` | `chat.*` |
+| `conversa` | `chat.*`, `agent.say`, `agent.manual` |
 | `pesquisa` | `research.run` |
 | `trade.leitura` | `trade.status`, `trade.study` |
 | `trade.piloto` | `trade.autopilot` |
-| `controle` | `ui.*` |
+| `controle` | `ui.*`, `agent.do` |
 | `configuracao` | `settings.*` |
-| `outros` | qualquer outra ação (ex.: `agent.*`, `notify`) |
+| `outros` | qualquer outra ação (ex.: `notify`) |
 
 1. `permission.request { to, scope, actions, reason }`: o Asafe aplica as regras aos padrões do escopo. Se todos estiverem permitidos, concede; se algum estiver recusado, nega com `denied`; se não, mostra o cartão **"pede permissão"**, com o motivo (`reason`, a frase original do Sr. Nathanael), e segura a resposta até a decisão (até 2 min). Ao aceitar dá para escolher **"Sempre para o escopo"**, que vira regra.
 2. A permissão concedida (`grantId`) vale até ser retirada ou o Asafe reiniciar. Enquanto valer, os pedidos daquele agente para aquele escopo **passam direto**, sem novo cartão.

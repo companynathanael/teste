@@ -77,16 +77,17 @@
 
   /* ---------- escopos (permissões pedidas pelo agente, ver PERMISSOES.md do Horácio) ---------- */
   const SCOPES = {
-    conversa: { label: 'conversar com', patterns: ['chat.*'] },
+    conversa: { label: 'conversar com', patterns: ['chat.*', 'agent.say', 'agent.manual'] },
     pesquisa: { label: 'pesquisar na web pelo', patterns: ['research.run'] },
     'trade.leitura': { label: 'ver e estudar o trade do', patterns: ['trade.status', 'trade.study'] },
     'trade.piloto': { label: 'ligar ou desligar o piloto automático do', patterns: ['trade.autopilot'] },
-    controle: { label: 'operar a tela do', patterns: ['ui.*'] },
+    controle: { label: 'operar a tela do', patterns: ['ui.*', 'agent.do'] },
     configuracao: { label: 'mudar as configurações do', patterns: ['settings.*'] },
     outros: { label: 'usar outras funções do', patterns: [] }
   };
   function scopeOf(action) {
-    if (/^chat\./.test(action)) return 'conversa';
+    if (/^chat\./.test(action) || action === 'agent.say' || action === 'agent.manual') return 'conversa';
+    if (action === 'agent.do') return 'controle'; // o agente executa ações na própria tela
     if (action === 'research.run') return 'pesquisa';
     if (action === 'trade.status' || action === 'trade.study') return 'trade.leitura';
     if (action === 'trade.autopilot') return 'trade.piloto';
