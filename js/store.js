@@ -19,7 +19,7 @@
     return { version: 1, agents: [], links: [], folders: [], files: [], activity: [], core: { x: 0, y: 0 }, permissions: emptyPermissions() };
   }
   function emptyPermissions() {
-    return { default: 'ask', rules: [], history: [] };
+    return { default: 'auto', rules: [], history: [], conscience: { enabled: true, categories: {} }, v: 2 };
   }
 
   function seed() {
@@ -63,6 +63,12 @@
       const raw = localStorage.getItem(KEY);
       state = raw ? Object.assign(emptyState(), JSON.parse(raw)) : seed();
       state.permissions = Object.assign(emptyPermissions(), state.permissions || {});
+      // v2: o Asafe decide sozinho (consciência); "perguntar sempre" deixa de ser o padrão
+      if (state.permissions.v !== 2) {
+        if (state.permissions.default === 'ask' || state.permissions.default === 'allow') state.permissions.default = 'auto';
+        state.permissions.conscience = Object.assign({ enabled: true, categories: {} }, state.permissions.conscience || {});
+        state.permissions.v = 2;
+      }
     } catch (e) {
       state = seed();
     }
@@ -251,8 +257,8 @@
 
     /* ---------- permissões de execução ---------- */
     setPermissionDefault(mode) {
-      if (!['ask', 'allow', 'deny'].includes(mode)) return;
-      const label = { ask: 'perguntar sempre', allow: 'permitir tudo', deny: 'recusar tudo' }[mode];
+      if (!['auto', 'ask', 'deny'].includes(mode)) return;
+      const label = { auto: 'automático (consciência)', ask: 'perguntar sempre', deny: 'recusar tudo' }[mode];
       commit(() => { state.permissions.default = mode; }, `Permissões: padrão agora é "${label}"`);
     },
     addRule({ from = '*', to = '*', action = '*', decision }) {
@@ -273,6 +279,12 @@
         state.permissions.history.unshift(Object.assign({ id: uid('pd'), t: now() }, entry));
         state.permissions.history = state.permissions.history.slice(0, 200);
       }, entry.by === 'regra' ? null : `${entry.allow ? 'Permitido' : 'Recusado'}: ${entry.from} → ${entry.to} · ${entry.action}`);
+    },
+    setConscience(id, on) {
+      commit(() => {
+        const c = state.permissions.conscience;
+        if (id === '*') c.enabled = !!on; else c.categories[id] = !!on;
+      }, `Consciência: ${id === '*' ? 'ligada' : id} ${on ? 'ativada' : 'desativada'}`.replace('ligada ativada', 'ligada').replace('ligada desativada', 'desligada'));
     },
     clearHistory() { commit(() => { state.permissions.history = []; }, 'Histórico de permissões limpo'); },
 

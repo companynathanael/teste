@@ -44,6 +44,7 @@
   function record(env, info) {
     emit('traffic', { env, info });
     if (!['request', 'response', 'event'].includes(env.type)) return;
+    if (info.status === 'blocked') { Perms.logBlocked(env, info.verdict); return; }
     // consultas ao próprio núcleo (roster/ping) não vão para o log, só recusas
     if ((env.to === CORE || env.from === CORE) && info.status !== 'error') return;
     if (info.status === 'denied') return; // a resposta de recusa já entra no log
@@ -72,8 +73,8 @@
     if (mode !== 'server') return;
     clearTimeout(pushTimer);
     pushTimer = setTimeout(() => {
-      const { default: def, rules } = Store.state.permissions;
-      const body = Object.assign(topology(), { policy: { default: def, rules } });
+      const { default: def, rules, conscience } = Store.state.permissions;
+      const body = Object.assign(topology(), { policy: { default: def, rules, conscience } });
       fetch(server + '/topology', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
         .catch(() => {});
     }, 150);

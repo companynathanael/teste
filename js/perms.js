@@ -50,11 +50,21 @@
     } catch (e) { /* armazenamento cheio */ }
   }
 
+  /** A consciência recusou sozinha: entra no histórico, sem incomodar o Sr. Nathanael. */
+  function logBlocked(env, verdict) {
+    const isPerm = env.action === 'permission.request';
+    const p = env.payload || {};
+    const e = isPerm
+      ? { from: env.from, to: p.to || '?', action: 'permission:' + (p.scope || '?'), payload: p }
+      : env;
+    record(isPerm ? Object.assign({ kind: 'permission' }, e) : e, false, 'consciência', { rule: verdict ? verdict.label : 'consciência', match: verdict ? verdict.match : '' });
+  }
+
   /** Usado pelo roteador do navegador: aplica a política e, se preciso, pergunta. */
   function authorize(env, path) {
     const d = AsafeRouter.decide(Store.state.permissions, env);
     if (d.decision === 'allow') {
-      if (!AsafeRouter.isExempt(env)) record(env, true, 'regra', { rule: d.rule ? ruleLabel(d.rule) : 'padrão: permitir tudo' });
+      if (!AsafeRouter.isExempt(env)) record(env, true, d.rule ? 'regra' : 'consciência', { rule: d.rule ? ruleLabel(d.rule) : 'seguro' });
       return Promise.resolve({ allow: true });
     }
     if (d.decision === 'deny') {
@@ -202,7 +212,7 @@
       box.appendChild(h(`<div class="empty perm-empty">
         <img src="assets/asafe-mark-red.png" alt="" />
         <p>Nenhum pedido aguardando.</p>
-        <small>Quando o Horácio ou o Miquéias pedirem para executar algo em outro agente, o pedido aparece aqui para você aceitar ou recusar.</small>
+        <small>${Store.state.permissions.default === 'ask' ? 'No modo Perguntar, os pedidos entre agentes aparecem aqui para você aceitar ou recusar.' : 'No modo Automático, o Asafe decide sozinho: veja no histórico abaixo o que a consciência recusou.'}</small>
       </div>`));
     }
     items.forEach(it => box.appendChild(card(it, false)));
@@ -261,7 +271,7 @@
       <li class="${x.allow ? 'ok' : 'no'}" style="--i:${Math.min(i, 12)}">
         <span class="hist-dot"></span>
         <span class="hist-main"><b>${x.allow ? 'Permitido' : 'Recusado'}</b> ${esc(nameOf(x.from))} → ${esc(nameOf(x.to))} · <code class="mono">${esc(x.action.startsWith('permission:') ? 'permissão · ' + scopeName(x.action.slice(11)) : x.action)}</code>
-          <small>${esc(x.by === 'regra' ? 'automático · ' + (x.rule || 'regra') : x.by === 'tempo' ? 'expirou sem resposta' : x.by === 'retirada' ? 'permissão retirada por você' : 'decidido por você')}${x.preview ? ' · ' + esc(x.preview.replace(/\s+/g, ' ').slice(0, 90)) : ''}</small></span>
+          <small>${esc(x.by === 'consciência' ? (x.allow ? 'consciência · seguro, permitido sozinho' : 'consciência · bloqueado: ' + (x.rule || '') + (x.match ? ' («' + x.match + '»)' : '')) : x.by === 'regra' ? 'automático · ' + (x.rule || 'regra') : x.by === 'tempo' ? 'expirou sem resposta' : x.by === 'retirada' ? 'permissão retirada por você' : 'decidido por você')}${x.preview ? ' · ' + esc(x.preview.replace(/\s+/g, ' ').slice(0, 90)) : ''}</small></span>
         <time class="mono dim" title="${fmtDate(x.t)}">${timeAgo(x.t)}</time>
       </li>`)));
   }
@@ -290,8 +300,40 @@
     });
   }
 
+  function renderConscience() {
+    const box = $('#conscienceList');
+    if (!box) return;
+    const c = Store.state.permissions.conscience || { enabled: true, categories: {} };
+    $('#conscienceOn').checked = c.enabled !== false;
+    $('#consciencePanel').classList.toggle('off', c.enabled === false);
+    const today = new Date().toDateString();
+    const blocked = Store.state.permissions.history.filter(x => x.by === 'consciência' && !x.allow);
+    $('#conscienceCount').textContent = blocked.filter(x => new Date(x.t).toDateString() === today).length + ' hoje';
+    box.innerHTML = '';
+    AsafeRouter.CONSCIENCE.forEach(cat => {
+      const on = c.categories[cat.id] !== false;
+      const n = blocked.filter(x => x.rule === cat.label).length;
+      const li = h(`<li class="cs-item ${on ? '' : 'off'}">
+        <label class="switch"><input type="checkbox" ${on ? 'checked' : ''} /><i></i></label>
+        <span class="cs-main"><b>${esc(cat.label)}</b><small>${esc(cat.desc)}</small></span>
+        <span class="mono dim">${n}</span>
+      </li>`);
+      li.querySelector('input').addEventListener('change', e => Store.setConscience(cat.id, e.target.checked));
+      box.appendChild(li);
+    });
+  }
+
+  function testPhrase() {
+    const v = $('#conscienceTest').value.trim();
+    const out = $('#conscienceResult');
+    if (!v) { out.textContent = ''; out.className = 'cs-result'; return; }
+    const r = AsafeRouter.assess({ action: 'chat.ask', payload: { prompt: v } }, Store.state.permissions.conscience);
+    out.className = 'cs-result ' + (r ? 'no' : 'ok');
+    out.textContent = r ? `Recusaria sozinho · ${r.label} («${r.match}»)` : 'Permitiria sozinho · nada sensível encontrado';
+  }
+
   function render() { renderPending(); }
-  function renderAll() { renderPending(); renderPolicy(); renderHistory(); renderGrants(); }
+  function renderAll() { renderPending(); renderPolicy(); renderHistory(); renderGrants(); renderConscience(); }
 
   function tick() {
     const now = Date.now();
@@ -321,14 +363,16 @@
       if (await UI.confirmBox('Limpar histórico', 'Apagar o histórico de decisões de permissão?', 'Limpar')) Store.clearHistory();
     });
     setInterval(tick, 250);
-    Store.on(() => { renderPolicy(); renderHistory(); });
+    Store.on(() => { renderPolicy(); renderHistory(); renderConscience(); });
+    $('#conscienceOn').addEventListener('change', e => Store.setConscience('*', e.target.checked));
+    let tt; $('#conscienceTest').addEventListener('input', () => { clearTimeout(tt); tt = setTimeout(testPhrase, 150); });
     if (window.Bus) Bus.on('change', renderGrants);
     setInterval(renderGrants, 30000);
     renderAll();
   }
 
   window.Perms = {
-    init, authorize, prompt, close, render: renderAll, renderGrants,
+    init, authorize, prompt, close, render: renderAll, renderGrants, logBlocked,
     get count() { return pending.size; },
     on(fn) { listeners.add(fn); return () => listeners.delete(fn); }
   };

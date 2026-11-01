@@ -684,3 +684,25 @@ textarea.code { font: 12.5px/1.6 var(--mono); }
 .grant-main small { color: var(--text-3); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .btn.sm { height: 30px; padding: 0 10px; font-size: 12px; }
 #view-perms .flow-side { overflow: auto; }
+
+/* ---------------- consciência do Asafe ---------------- */
+.conscience { background: linear-gradient(160deg, rgba(229,20,42,.14), rgba(255,255,255,.01) 60%), var(--glass); border-color: rgba(229,20,42,.3); }
+.conscience.off { filter: saturate(.3); }
+.cs-intro { margin: -4px 0 12px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.cs-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.cs-item { display: grid; grid-template-columns: auto 1fr auto; gap: 10px; align-items: center; padding: 8px 10px; border-radius: 10px; background: rgba(0,0,0,.25); border: 1px solid var(--line); transition: opacity .2s; }
+.cs-item.off { opacity: .5; }
+.cs-main { display: grid; min-width: 0; }
+.cs-main b { font-weight: 500; font-size: 12.5px; }
+.cs-main small { color: var(--text-3); font-size: 10.5px; line-height: 1.35; }
+.switch { position: relative; display: inline-block; width: 32px; height: 18px; flex: none; cursor: pointer; }
+.switch input { position: absolute; opacity: 0; inset: 0; margin: 0; cursor: pointer; }
+.switch i { position: absolute; inset: 0; border-radius: 10px; background: rgba(255,255,255,.12); border: 1px solid var(--line-2); transition: background .2s; }
+.switch i::after { content: ''; position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: 50%; background: #fff; transition: transform .25s var(--ease); }
+.switch input:checked + i { background: var(--red); border-color: rgba(255,80,95,.6); box-shadow: 0 0 12px -2px var(--red-glow); }
+.switch input:checked + i::after { transform: translateX(14px); }
+.switch input:focus-visible + i { outline: 2px solid var(--red-2); outline-offset: 2px; }
+.cs-test { display: grid; gap: 6px; margin-top: 12px; font-size: 12px; color: var(--text-2); }
+.cs-result { margin: 8px 0 0; font-size: 12px; min-height: 1em; }
+.cs-result.ok { color: #fff; }
+.cs-result.no { color: #ff8a95; }

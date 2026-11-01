@@ -211,7 +211,7 @@
           <div class="perm-head">
             <div>
               <h2>Pedidos de execução</h2>
-              <p class="muted">Quando um agente pede para executar algo em outro, o Asafe segura o pedido até você decidir.</p>
+              <p class="muted">O Asafe decide sozinho pela consciência e pelas regras. Só aparecem aqui pedidos que precisem de você (modo "Perguntar").</p>
             </div>
             <span class="chip mono" id="permCount">0</span>
           </div>
@@ -225,6 +225,19 @@
         </section>
 
         <aside class="flow-side">
+          <div class="glass panel conscience" id="consciencePanel">
+            <div class="panel-head">
+              <h2>Consciência do Asafe</h2>
+              <label class="switch" title="Ligar/desligar a consciência"><input type="checkbox" id="conscienceOn" /><i></i></label>
+            </div>
+            <p class="muted small cs-intro">Recusa sozinho, sem te perguntar, pedidos que envolvam: <span class="chip mono" id="conscienceCount">0 hoje</span></p>
+            <ul class="cs-list" id="conscienceList"></ul>
+            <label class="cs-test">Testar uma frase
+              <input id="conscienceTest" placeholder="ex.: acessar dados pessoais de uma pessoa" autocomplete="off" />
+            </label>
+            <p class="cs-result" id="conscienceResult"></p>
+          </div>
+
           <div class="glass panel">
             <div class="panel-head"><h2>Permissões ativas</h2><span class="chip mono" id="grantCount">0</span></div>
             <ul class="grant-list" id="permGrants"></ul>
@@ -233,11 +246,11 @@
           <div class="glass panel">
             <div class="panel-head"><h2>Política padrão</h2></div>
             <div class="seg seg3" id="permDefault" role="radiogroup" aria-label="Política padrão">
+              <label><input type="radio" name="permdef" value="auto" /><span>Automático</span></label>
               <label><input type="radio" name="permdef" value="ask" /><span>Perguntar</span></label>
-              <label><input type="radio" name="permdef" value="allow" /><span>Permitir tudo</span></label>
               <label><input type="radio" name="permdef" value="deny" /><span>Recusar tudo</span></label>
             </div>
-            <p class="muted small">Vale para pedidos sem regra. <b>ping</b> e desligar o controle de tela nunca precisam de permissão.</p>
+            <p class="muted small"><b>Automático:</b> o Asafe decide sozinho. Permite o que é seguro e a consciência recusa o que for sensível, sem perguntar. Regras suas valem antes do padrão; a consciência vale sempre.</p>
           </div>
 
           <div class="glass panel grow">

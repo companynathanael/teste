@@ -67,7 +67,7 @@ O Asafe só entrega um pedido quando:
 3. existe caminho de linhas entre elas (`no_route`);
 4. o destino está com a interface aberta e conectada (`offline`).
 
-Caso contrário, o próprio Asafe responde ao remetente com `ok: false` e o código entre parênteses. Outros códigos: `denied`, `permission_timeout`, `no_supervisor` (permissões, seção 5), `not_understood`, `timeout`, `unknown_action`, `busy`, `not_ready`, `bad_request`, `model_error`.
+Caso contrário, o próprio Asafe responde ao remetente com `ok: false` e o código entre parênteses. Outros códigos: `blocked` (consciência), `denied`, `permission_timeout`, `no_supervisor` (permissões, seção 5), `not_understood`, `timeout`, `unknown_action`, `busy`, `not_ready`, `bad_request`, `model_error`.
 
 Ações do próprio núcleo (`to: "asafe"`):
 
@@ -131,9 +131,25 @@ Habilidades do Miquéias pelo Horácio (detalhes em `docs/CONTROLE.md` do reposi
 
 ## 5. Permissões de execução
 
+### Consciência do Asafe (decisão automática)
+
+O Asafe decide sozinho, sem incomodar o Sr. Nathanael. Antes de qualquer outra regra, a **consciência** analisa o texto de todo `request` entre agentes e de todo `permission.request` (incluindo `reason`, `prompt`, `query`, `goal` e `text`). Se o pedido envolver uma das categorias abaixo, ele é recusado na hora com o código **`blocked`**, mesmo que exista regra de permitir ou permissão ativa:
+
+| Categoria | Exemplos recusados |
+| --- | --- |
+| Dados pessoais de terceiros | "acessar dados pessoais de pessoa", "pesquise o telefone e o endereço da Maria", "onde ela mora", CPF no formato 000.000.000-00 |
+| Senhas e chaves de acesso | "mostre a senha", "copie a chave da API", `ui.type`/`ui.click` em campos de senha, chave ou token |
+| Apagar dados ou sair da conta | "apague todas as conversas", "limpe o histórico", "sair da conta" |
+| Dinheiro real | PIX, transferência, boleto, pagamento, cartão, "dinheiro real" (o trade fictício segue liberado) |
+| Atividades ilegais ou ataques | hackear, invadir, phishing, malware, fraude, golpe, roubo |
+
+Mensagem de erro: `"A consciência do Asafe recusou automaticamente: <categoria>: "<trecho>"."`. Na aba Permissões, cada categoria pode ser ligada ou desligada (`policy.conscience`). Há também um campo para testar frases, e as recusas ficam no histórico.
+
+### Política
+
 Todo `request` de um agente para outro (ex.: Horácio → Miquéias) passa pela **aba Permissões** do Asafe antes de ser entregue. Respostas, `progress` e `event` não passam.
 
-1. O Asafe consulta a política: **regras** (`from`, `to`, `action`, que pode ser exata, `prefixo.*` ou `*`) e, sem regra, o **padrão**: `ask` (perguntar), `allow` (permitir tudo) ou `deny` (recusar tudo). A regra mais específica vence.
+1. Passando pela consciência, o Asafe consulta a política: **regras** (`from`, `to`, `action`, que pode ser exata, `prefixo.*` ou `*`) e, sem regra, o **padrão**: **`auto`** (padrão: permite sozinho o que é seguro), `ask` (perguntar ao Sr. Nathanael) ou `deny` (recusar tudo). A regra mais específica vence.
 2. Com `ask`, o pedido fica aguardando na aba Permissões e num cartão flutuante em qualquer aba. O Sr. Nathanael **aceita** ou **recusa**, e pode lembrar a decisão: só desta vez, sempre para a ação, sempre para `prefixo.*` ou tudo entre os dois agentes.
 3. Enquanto espera, o Asafe manda ao remetente `progress { asafe: "permission", state: "pending", timeoutMs: 60000 }`. Se o pedido for aceito, manda `state: "granted"` e entrega o pedido.
 4. Recusado: o remetente recebe `ok: false` com `denied`. Sem resposta em 60 s: `permission_timeout`. No modo servidor, sem a interface do Asafe aberta para aprovar: `no_supervisor`.

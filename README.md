@@ -8,7 +8,7 @@ O **Asafe** é o centro da rede de IAs: conecta o agente principal (**Horácio**
 | --- | --- |
 | **Dados de Servidores** | Cada IA tem um servidor dentro do Asafe, com pastas (Memória, Conversas, Logs, Configurações + pastas próprias). Envie arquivos, crie registros, busque, baixe e apague dados. |
 | **Linhas de Conexão** | Fluxograma com o Asafe no centro. Adicione IAs e arraste do conector (●) de um nó até outro para criar uma linha. Nós sem caminho até o Asafe ficam *isolados*. |
-| **Permissões** | Todo pedido de execução entre agentes (ex.: Horácio → Miquéias) espera aqui você **aceitar** ou **recusar**. Dá para lembrar a decisão como regra, escolher o padrão (perguntar, permitir tudo ou recusar tudo) e ver o histórico. Um cartão flutuante avisa em qualquer aba. |
+| **Permissões** | O Asafe **decide sozinho** os pedidos entre agentes (ex.: Horácio → Miquéias): a **consciência** recusa automaticamente o que envolver dados pessoais de terceiros, senhas, apagar dados, dinheiro real ou atividades ilegais, e o resto é permitido. Também tem regras, permissões ativas (com Retirar), o modo "Perguntar" opcional e o histórico. |
 
 ### Atalhos do fluxograma
 - Arrastar fundo: mover · roda do mouse: zoom

@@ -21,7 +21,7 @@ const DATA = process.env.ASAFE_DATA || path.join(__dirname, 'data');
 const TOPO_FILE = path.join(DATA, 'topology.json');
 fs.mkdirSync(path.join(DATA, 'logs'), { recursive: true });
 
-let topology = { agents: [], links: [], policy: { default: 'ask', rules: [] } };
+let topology = { agents: [], links: [], policy: { default: 'auto', rules: [], conscience: { enabled: true, categories: {} } } };
 try { topology = JSON.parse(fs.readFileSync(TOPO_FILE, 'utf8')); } catch (e) { /* ainda não publicada */ }
 
 const streams = new Map(); // agentId -> Set<res>
@@ -167,7 +167,7 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'POST' && url.pathname === '/topology') {
       const t = await readBody(req);
       if (!Array.isArray(t.agents) || !Array.isArray(t.links)) return json(res, 400, { ok: false, message: 'topologia inválida' });
-      topology = { agents: t.agents, links: t.links, policy: t.policy || topology.policy || { default: 'ask', rules: [] } };
+      topology = { agents: t.agents, links: t.links, policy: t.policy || topology.policy || { default: 'auto', rules: [], conscience: { enabled: true, categories: {} } } };
       fs.writeFile(TOPO_FILE, JSON.stringify(topology, null, 2), () => {});
       presence();
       return json(res, 200, { ok: true });

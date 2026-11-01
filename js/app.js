@@ -98,7 +98,8 @@
       else if (env.type === 'response') {
         if (info.status === 'error') {
           FlowView.pulseRoute([env.from, env.to], 'err');
-          if (!env.error || !['denied', 'permission_timeout'].includes(env.error.code)) toast(`Linha recusada: ${env.error && env.error.message}`, 'err');
+          if (env.error && env.error.code === 'blocked') toast(env.error.message.replace('A consciência do Asafe recusou automaticamente', 'Consciência bloqueou'), 'err');
+          else if (!env.error || !['denied', 'permission_timeout'].includes(env.error.code)) toast(`Linha recusada: ${env.error && env.error.message}`, 'err');
         } else FlowView.pulseRoute(info.route, 'res');
       }
     });

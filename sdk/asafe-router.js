@@ -46,6 +46,93 @@
     return path;
   }
 
+  /* ---------- consciência do Asafe ----------
+     Analisa o conteúdo de cada pedido e recusa sozinho o que for sensível,
+     mesmo que exista regra ou permissão ativa. */
+  const fold = t => String(t || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+
+  function gatherText(v, out = [], depth = 0) {
+    if (v == null || depth > 4 || out.join(' ').length > 6000) return out;
+    if (typeof v === 'string') out.push(v);
+    else if (Array.isArray(v)) v.forEach(x => gatherText(x, out, depth + 1));
+    else if (typeof v === 'object') Object.keys(v).forEach(k => gatherText(v[k], out, depth + 1));
+    return out;
+  }
+
+  const NEAR = '\\W+(?:[a-z0-9]+\\W+){0,6}?';
+  const re = s => new RegExp(s);
+  const CONSCIENCE = [
+    {
+      id: 'dados_pessoais', label: 'Dados pessoais de terceiros',
+      desc: 'Buscar, acessar ou expor dados de pessoas: CPF, RG, endereço, telefone, e-mail, localização, "dados pessoais".',
+      tests: [
+        /\bdados (pessoais|sensiveis|privados|cadastrais)\b/,
+        /\binformac(ao|oes) (pessoa(l|is)|privad[ao]s?|sigilos[ao]s?|confidencia(l|is))\b/,
+        /\bdados (de|da|do|dessa|desse|daquela|daquele) (pessoa|alguem|fulan[oa]|usuario|cliente|funcionari[oa]|vizinh[oa])/,
+        /\b(doxx|doxing|stalk)/,
+        /\bonde (el[ae]|fulan[oa]|essa pessoa|[a-z]+) (mora|trabalha|esta agora)\b/,
+        re('(acess|busc|descobr|encontr|pesquis|levant|obt|obte|ach|vaz|expo|rastre|localiz|investig|espion|monitor|consult|peg|pux|extra|cole|coleta)\\w*' + NEAR + '(cpf|rg|cnh|passaporte|endereco|telefone|celular|whatsapp|e-?mail|localizacao|conta bancaria|historico medico|prontuario|salario|renda|placa do carro|redes sociais de)\\b'),
+        /\b\d{3}\.\d{3}\.\d{3}-\d{2}\b/
+      ]
+    },
+    {
+      id: 'credenciais', label: 'Senhas e chaves de acesso',
+      desc: 'Ver, copiar, enviar ou digitar senhas, tokens, chaves de API e códigos de verificação.',
+      tests: [
+        re('(mostr|revel|copi|envi|mand|ler|leia|ver|peg|extra|descobr|quebr|exib|digit|preench|troc|alter|mud|vaz|compartilh|anot)\\w*' + NEAR + '(senha|password|token|chave (da |de )?api|api ?key|credenciai?s?|codigo de (verificacao|seguranca)|2fa|cookie)')
+      ],
+      field: /(senha|password|chave|api|token|credencia)/
+    },
+    {
+      id: 'destrutivo', label: 'Apagar dados ou sair da conta',
+      desc: 'Apagar conversas, histórico, memória, arquivos ou a conta; sair da conta.',
+      tests: [
+        re('(apag|exclu|delet|limp|remov|format|zer|destru|resete|reset)\\w*' + NEAR + '(tudo|todas|todos|historico|conversas|dados|conta|arquivos|memoria|backup|servidor)\\b'),
+        /\b(sair da conta|deslog|logout|desconectar a conta)\b/
+      ]
+    },
+    {
+      id: 'dinheiro_real', label: 'Dinheiro real',
+      desc: 'PIX, transferências, boletos, pagamentos, cartão ou conta real. O trade fictício do Miquéias continua liberado.',
+      tests: [
+        /\b(pix|transferenci\w*|transferir|boleto|cartao de credito|cartao de debito|dinheiro real|conta real|saque|sacar|deposit\w*|pagamento|pagar|fazer um pagamento)\b/,
+        /\b(?:\d[ -]?){15,16}\b/
+      ]
+    },
+    {
+      id: 'ilegal', label: 'Atividades ilegais ou ataques',
+      desc: 'Invadir sistemas, malware, phishing, fraude, golpes, roubo ou espionagem.',
+      tests: [
+        /\b(hack\w*|invad\w*|invasao|phishing|malware|ransomware|ddos|keylogger|spyware|fraud\w*|golpe\w*|roub\w*|furt\w*|pirate\w*|crack\w*|sql injection|engenharia social|clonar (cartao|whatsapp|celular|conta))\b/,
+        /\b(criar|fazer|desenvolver|espalhar|instalar) (um )?virus\b/
+      ]
+    }
+  ];
+
+  /**
+   * Avalia um pedido. Devolve null (seguro) ou { category, label, reason, match }.
+   * settings = { enabled: true, categories: { dados_pessoais: true, ... } }
+   */
+  function assess(env, settings) {
+    if (settings && settings.enabled === false) return null;
+    const on = id => !settings || !settings.categories || settings.categories[id] !== false;
+    const raw = gatherText([env.action, env.payload]).join(' \n ');
+    const text = fold(raw);
+    for (const c of CONSCIENCE) {
+      if (!on(c.id)) continue;
+      for (const t of c.tests) {
+        const m = text.match(t) || raw.match(t);
+        if (m) return { category: c.id, label: c.label, match: m[0].slice(0, 80), reason: `${c.label}: "${m[0].slice(0, 60)}"` };
+      }
+      // digitar ou clicar em campos de senha/chave pelo controle de tela
+      if (c.field && /^ui\.(type|click)$/.test(env.action || '')) {
+        const target = fold([env.payload && env.payload.name, env.payload && env.payload.ref].join(' '));
+        if (c.field.test(target)) return { category: c.id, label: c.label, match: target, reason: `${c.label}: campo "${target.trim()}"` };
+      }
+    }
+    return null;
+  }
+
   /* ---------- permissões de execução ---------- */
   // Pedidos que nunca precisam de aprovação: só leitura de estado ou desligar um controle.
   function isExempt(env) {
@@ -72,7 +159,8 @@
       rules.sort((a, b) => score(b) - score(a));
       return { decision: rules[0].decision, rule: rules[0] };
     }
-    return { decision: (policy && policy.default) || 'ask', reason: 'padrão' };
+    const def = (policy && policy.default) || 'auto';
+    return { decision: def === 'auto' || def === 'allow' ? 'allow' : def, reason: 'padrão' };
   }
 
   /* ---------- escopos (permissões pedidas pelo agente, ver PERMISSOES.md do Horácio) ---------- */
@@ -160,6 +248,11 @@
       const topo = topology();
       if (!topo.agents.some(a => a.id === to)) throw Object.assign(new Error(`"${to}" não está cadastrado no Asafe.`), { code: 'unknown_agent' });
       if (!SCOPES[scope]) throw Object.assign(new Error(`Escopo desconhecido: "${scope}".`), { code: 'bad_request' });
+      const verdict = assess({ action: 'permission.request', payload: { scope, actions: p.actions, reason: p.reason } }, (policy() || {}).conscience);
+      if (verdict) {
+        onTraffic(env, { status: 'blocked', verdict, route: [env.from, CORE] });
+        throw Object.assign(new Error(`A consciência do Asafe recusou automaticamente: ${verdict.reason}.`), { code: 'blocked', category: verdict.category });
+      }
       const existing = findGrant(env.from, to, scope);
       const answer = g => ({ granted: true, to, scope, grantId: g.grantId, expiresAt: g.expiresAt || undefined });
       if (existing) return answer(existing);
@@ -258,6 +351,14 @@
       if (!path) return fail(env, 'no_route', `Não existe linha de servidor entre ${env.from} e ${env.to}.`);
       if (!online.has(env.to)) return fail(env, 'offline', `${env.to} está desconectado do Asafe agora (abra a interface dele).`);
 
+      // a consciência vale sempre, mesmo com regra ou permissão ativa
+      if (env.type === 'request') {
+        const verdict = assess(env, (policy() || {}).conscience);
+        if (verdict) {
+          onTraffic(env, { status: 'blocked', verdict, route: path });
+          return fail(env, 'blocked', `A consciência do Asafe recusou automaticamente: ${verdict.reason}.`);
+        }
+      }
       // permissão ativa do escopo (pedida antes com permission.request): passa direto
       if (env.type === 'request' && findGrant(env.from, env.to, scopeOf(env.action))) return forward(env, path);
       if (env.type === 'request' && authorize) return gate(env, path);
@@ -312,5 +413,5 @@
     };
   }
 
-  return { VERSION, CORE, uid, slug, validate, findPath, createRouter, decide, isExempt, ruleMatches, SCOPES, scopeOf, scopePatterns };
+  return { VERSION, CORE, uid, slug, validate, findPath, createRouter, decide, isExempt, ruleMatches, SCOPES, scopeOf, scopePatterns, CONSCIENCE, assess };
 });
