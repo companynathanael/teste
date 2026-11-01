@@ -83,12 +83,14 @@ Ações do próprio núcleo (`to: "asafe"`):
 
 ### Miquéias (`miqueias`)
 
+Núcleo próprio: **JpG 1.1**, construído sobre o Claude Opus 5.5. O hello anuncia o papel `IA auxiliar · núcleo JpG 1.1`.
+
 | Ação | payload | resposta |
 | --- | --- | --- |
 | `chat.ask` | `{ prompt, newChat = true }` | `{ reply, model, chatId }`, com `progress { delta }` enquanto escreve |
 | `chat.new` | `{}` | `{ ok: true }` |
-| `settings.model` | `{ model: "demo" \| "claude-opus-5-5" \| "claude-sonnet-5-5" \| "claude-haiku-5-5" }` | `{ model, label }` |
-| `ping` | `{}` | `{ ready, busy, model }` |
+| `settings.model` | `{ model: "demo" \| "jpg-1.1" \| "claude-sonnet-5-5" \| "claude-haiku-5-5" }` (o nome antigo `"claude-opus-5-5"` é aceito e vira `"jpg-1.1"`) | `{ model, label }` |
+| `ping` | `{}` | `{ ready, busy, model, core: { name: "JpG 1.1", base: "claude-opus-5-5", active, effort } }` |
 
 | `research.run` | `{ query }` | `{ reply, sources: [{ title, url }], searches, model }`, com `progress { delta }` enquanto escreve. Pesquisa na web com a busca do Claude (precisa da chave da API; no modo demo responde com a base local e avisa) |
 | `trade.status` | `{}` | `{ equity, cash, start, returnPct, position, trades, autopilot: { on, mode, strategy, symbol }, lessonsStudied, lastStudy, journal }` (journal = 10 últimas entradas) |
