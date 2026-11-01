@@ -120,7 +120,50 @@ Habilidades do Miquéias pelo Horácio (detalhes em `docs/CONTROLE.md` do reposi
 | `Miquéias, ligue o piloto automático em ETH com RSI ao vivo`, `/piloto on …` | `trade.autopilot { on: true, … }`, só depois de **Confirmar** no Horácio |
 | `Miquéias, desligue o piloto`, `/piloto off` | `trade.autopilot { on: false }` |
 
-## 5. Transportes
+## 5. Controle de tela (`ui.*`)
+
+Com a permissão do Sr. Nathanael, o Horácio pode **operar a tela** de outro agente como uma pessoa: ler, clicar, digitar, rolar e esperar. São `request`/`response` normais do protocolo v1, e o roteador não muda.
+
+Especificação completa: `docs/CONTROLE.md` no repositório companynathanael/Hor-cio-Jarvis. Implementação pronta para qualquer agente: [`sdk/asafe-ui.js`](../sdk/asafe-ui.js).
+
+| Ação | payload | resposta |
+| --- | --- | --- |
+| `ui.snapshot` | `{}` | `{ app, screen, elements: [{ ref, role, name, value?, state?, protected? }], text? }` |
+| `ui.click` | `{ ref? \| name?, confirm? }` | `{ done: true, target }` |
+| `ui.type` | `{ text, ref? \| name?, clear = true, submit = false, confirm? }` | `{ done: true, target }` |
+| `ui.key` | `{ key, ref? }` | `{ done: true }` |
+| `ui.scroll` | `{ direction: "up" \| "down" \| "top" \| "bottom", ref? }` | `{ done: true }` |
+| `ui.wait` | `{ text?, idle?, timeout = 15000 }` | `{ found: true }` ou erro `timeout` |
+| `ui.control` | `{ on, by }` | `{ on }` |
+
+Evento do agente controlado para quem opera: `ui.stopped { reason: "user" }`.
+
+Regras de segurança:
+
+- Qualquer ação `ui.*` mostra no agente o aviso **"Horácio está operando"** com o botão **Parar**. O controle nunca fica invisível.
+- Depois de **Parar**, o agente recusa os próximos `ui.*` com `stopped` até receber um novo `ui.control { on: true }`.
+- Elementos protegidos (sair da conta, apagar conversas, senha, chave da API, salvar configurações) recusam sem `confirm: true` (`needs_confirmation`). O Horácio só manda `confirm` depois que o Sr. Nathanael aperta **Confirmar**.
+- O `ui.snapshot` nunca devolve o valor de senhas nem da chave da API.
+- Outros erros: `not_found`, `ambiguous` (com `candidates`), `disabled`, `bad_request`.
+
+Uso num agente, depois do `asafe-link.js`:
+
+```html
+<script src="asafe-ui.js"></script>
+<script>
+  AsafeUI.attach(link, {
+    app: "Miquéias", mainInput: "#input",
+    isBusy: () => !!state.busy,
+    protected: [{ selector: '[data-action="logout"]', reason: "Sair da conta" }]
+  });
+</script>
+```
+
+No Horácio: `Miquéias, leia a tela`, `Miquéias, clique em Nova conversa`, `Miquéias, digite "Olá" e depois envie`, `@miqueias role para baixo`, `Miquéias, espere a resposta`.
+
+Cada passo passa pelo Asafe e fica no log `Conversas` das duas IAs, com o conteúdo cortado em 600 caracteres.
+
+## 6. Transportes
 
 O SDK [`sdk/asafe-link.js`](../sdk/asafe-link.js) escolhe sozinho:
 
@@ -131,7 +174,7 @@ O SDK [`sdk/asafe-link.js`](../sdk/asafe-link.js) escolhe sozinho:
 
 No modo navegador, os agentes enviam `{ dir: "up", env }` no canal; o Asafe entrega `{ dir: "down", env }` e manda `core.heartbeat` a cada 4 s.
 
-## 6. Usando o SDK
+## 7. Usando o SDK
 
 ```html
 <script src="asafe-link.js"></script>

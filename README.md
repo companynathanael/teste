@@ -20,6 +20,7 @@ O Asafe roteia mensagens entre as IAs seguindo as linhas desenhadas no fluxogram
 
 - Protocolo: [`protocol/PROTOCOLO.md`](protocol/PROTOCOLO.md)
 - SDK para os agentes: [`sdk/asafe-link.js`](sdk/asafe-link.js)
+- Controle de tela (`ui.*`): [`sdk/asafe-ui.js`](sdk/asafe-ui.js), para o Horácio operar a tela de outro agente com o aviso "Horácio está operando" e o botão Parar
 - Integrações prontas: [`integrations/horacio.patch`](integrations/horacio.patch), [`integrations/miqueias.patch`](integrations/miqueias.patch)
 
 Dois modos, escolhidos automaticamente:
@@ -48,7 +49,7 @@ js/data.js        aba Dados de Servidores
 js/flow.js        aba Linhas de Conexão (fluxograma)
 js/app.js         boot, abas, backup
 js/bus.js         roteador das linhas (navegador) / ponte com o servidor
-sdk/              asafe-router.js (regras) e asafe-link.js (SDK dos agentes)
+sdk/              asafe-router.js (regras), asafe-link.js (SDK dos agentes) e asafe-ui.js (controle de tela)
 server/           servidor Node opcional
 integrations/     patches do Horácio e do Miquéias
 tools/            build-single.py gera dist/asafe.html
