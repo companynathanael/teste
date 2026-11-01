@@ -1,0 +1,404 @@
+diff --git a/app.js b/app.js
+index 3fcb775..0dcc231 100644
+--- a/app.js
++++ b/app.js
+@@ -68,8 +68,10 @@ form.addEventListener("submit", (e) => {
+   if (!text) return;
+   welcome.hidden = true;
+   thread.hidden = false;
+-  addUser(text);
+-  addAi();
++  if (!(window.horacioAsafe && window.horacioAsafe.handle(text))) {
++    addUser(text);
++    addAi();
++  }
+   input.value = "";
+   input.style.height = "auto";
+   send.disabled = true;
+diff --git a/asafe-link.js b/asafe-link.js
+new file mode 100644
+index 0000000..3d99c8a
+--- /dev/null
++++ b/asafe-link.js
+@@ -0,0 +1,213 @@
++/* =========================================================
++   AsafeLink · SDK de conexão de um agente ao Asafe
++   Arquivo único, sem dependências. Inclua com <script> (ou cole
++   dentro do HTML de arquivo único) e use window.AsafeLink.
++
++   const link = AsafeLink.connect({
++     id: 'miqueias', name: 'Miquéias', role: 'IA auxiliar', kind: 'ia',
++     actions: {
++       'chat.ask': { desc: 'Faz uma pergunta', handler: async (payload, ctx) => ({ reply: '...' }) }
++     }
++   });
++   const r = await link.request('miqueias', 'chat.ask', { prompt: 'Olá' });
++
++   Transporte:
++   - "server": servidor Asafe (node server/asafe-server.js), padrão http://localhost:7300
++   - "local":  mesmo navegador, via BroadcastChannel; a página do Asafe precisa estar aberta
++   Protocolo completo: protocol/PROTOCOLO.md
++   ========================================================= */
++(function (root) {
++  const VERSION = 1;
++  const CORE = 'asafe';
++  const CHANNEL = 'asafe-bus';
++  const DEFAULT_SERVER = 'http://localhost:7300';
++  const HEARTBEAT = 5000;
++
++  const uid = () => 'msg_' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-5);
++
++  function connect(opts) {
++    if (!opts || !opts.id) throw new Error('AsafeLink: informe o id do agente (ex.: "horacio").');
++    const me = {
++      id: opts.id, name: opts.name || opts.id, role: opts.role || '', kind: opts.kind || 'ia'
++    };
++    const actions = opts.actions || {};
++    const listeners = { status: new Set(), event: new Set(), message: new Set() };
++    const pending = new Map(); // id -> { resolve, reject, timer, onProgress }
++    const seen = new Set();
++
++    let status = 'connecting';
++    let mode = null;
++    let bc = null, es = null, server = null;
++    let lastCore = 0, hbTimer = null, watchTimer = null, closed = false;
++
++    const emit = (k, v) => listeners[k].forEach(fn => { try { fn(v); } catch (e) { console.error(e); } });
++    const setStatus = s => { if (s !== status) { status = s; emit('status', { status, mode }); } };
++
++    const envelope = (type, to, action, payload, extra) => Object.assign({
++      asafe: VERSION, id: uid(), type, from: me.id, to, action, payload, ts: Date.now()
++    }, extra || {});
++
++    const hello = () => envelope('hello', CORE, null, {
++      name: me.name, role: me.role, kind: me.kind,
++      actions: Object.keys(actions).map(name => ({ name, desc: actions[name].desc || '' }))
++    });
++
++    /* ---------- envio ---------- */
++    function post(env) {
++      if (mode === 'local') { bc.postMessage({ dir: 'up', env }); return Promise.resolve(); }
++      if (mode === 'server') {
++        return fetch(server + '/send', {
++          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(env)
++        }).then(r => r.json()).then(res => {
++          if (!res.ok && env.type === 'request') settle(env.id, false, null, { code: res.code, message: res.message });
++        }).catch(() => {
++          if (env.type === 'request') settle(env.id, false, null, { code: 'offline', message: 'Servidor do Asafe indisponível.' });
++        });
++      }
++      return Promise.reject(new Error('AsafeLink ainda não conectado.'));
++    }
++
++    function settle(id, ok, payload, error) {
++      const p = pending.get(id);
++      if (!p) return;
++      pending.delete(id);
++      clearTimeout(p.timer);
++      if (ok) p.resolve(payload);
++      else {
++        const e = new Error((error && error.message) || 'Falha na linha de servidor.');
++        e.code = (error && error.code) || 'error';
++        p.reject(e);
++      }
++    }
++
++    /* ---------- recebimento ---------- */
++    async function receive(env) {
++      if (!env || env.to !== me.id && env.to !== '*') return;
++      if (seen.has(env.id)) return;
++      seen.add(env.id);
++      if (seen.size > 500) seen.delete(seen.values().next().value);
++      emit('message', env);
++
++      if (env.type === 'response') return settle(env.replyTo, env.ok !== false, env.payload, env.error);
++      if (env.type === 'progress') {
++        const p = pending.get(env.replyTo);
++        if (p && p.onProgress) try { p.onProgress(env.payload); } catch (e) { console.error(e); }
++        return;
++      }
++      if (env.type === 'event') return emit('event', env);
++      if (env.type !== 'request') return;
++
++      const respond = (ok, payload, error) => post(envelope('response', env.from, env.action, ok ? payload : undefined,
++        { replyTo: env.id, ok, error: ok ? undefined : error }));
++      const act = actions[env.action];
++      if (!act) return respond(false, null, { code: 'unknown_action', message: `${me.name} não conhece a ação "${env.action}".` });
++      const ctx = {
++        from: env.from, id: env.id,
++        progress: data => post(envelope('progress', env.from, env.action, data, { replyTo: env.id }))
++      };
++      try {
++        const out = await act.handler(env.payload || {}, ctx);
++        respond(true, out === undefined ? {} : out);
++      } catch (e) {
++        respond(false, null, { code: e.code || 'handler_error', message: e.message || String(e) });
++      }
++    }
++
++    /* ---------- transportes ---------- */
++    function startLocal() {
++      mode = 'local';
++      if (typeof BroadcastChannel === 'undefined') { setStatus('offline'); return; }
++      bc = new BroadcastChannel(CHANNEL);
++      bc.onmessage = e => {
++        const m = e.data || {};
++        if (m.dir !== 'down' || !m.env) return;
++        if (m.env.from === CORE && m.env.action === 'core.heartbeat') {
++          const first = Date.now() - lastCore > HEARTBEAT * 2;
++          lastCore = Date.now();
++          if (first) post(hello());
++          setStatus('online');
++          return;
++        }
++        receive(m.env);
++      };
++      post(hello());
++      watchTimer = setInterval(() => setStatus(Date.now() - lastCore < HEARTBEAT * 2 ? 'online' : 'waiting'), 2000);
++      setStatus('waiting');
++    }
++
++    function startServer(url) {
++      mode = 'server';
++      server = url.replace(/\/$/, '');
++      es = new EventSource(`${server}/stream?agent=${encodeURIComponent(me.id)}`);
++      es.onopen = () => { post(hello()); setStatus('online'); };
++      es.onerror = () => setStatus('waiting');
++      es.onmessage = e => { try { receive(JSON.parse(e.data)); } catch (err) { /* ignore */ } };
++    }
++
++    async function probe(url) {
++      try {
++        const ctrl = new AbortController();
++        const t = setTimeout(() => ctrl.abort(), 900);
++        const r = await fetch(url.replace(/\/$/, '') + '/status', { signal: ctrl.signal });
++        clearTimeout(t);
++        const j = await r.json();
++        return j && j.asafe === VERSION;
++      } catch (e) { return false; }
++    }
++
++    (async () => {
++      const url = opts.server === undefined ? DEFAULT_SERVER : opts.server;
++      if (url && opts.transport !== 'local' && await probe(url)) startServer(url);
++      else startLocal();
++      if (closed) return;
++      hbTimer = setInterval(() => post(hello()).catch(() => {}), HEARTBEAT);
++      emit('status', { status, mode });
++    })();
++
++    if (typeof window !== 'undefined') {
++      window.addEventListener('pagehide', () => api.close());
++    }
++
++    /* ---------- API ---------- */
++    const api = {
++      get id() { return me.id; },
++      get status() { return status; },
++      get mode() { return mode; },
++
++      /** Pede para outro agente executar uma ação. Resolve com o payload da resposta. */
++      request(to, action, payload = {}, { timeout = 90000, onProgress } = {}) {
++        return new Promise((resolve, reject) => {
++          const env = envelope('request', to, action, payload);
++          const timer = setTimeout(() => settle(env.id, false, null, {
++            code: 'timeout',
++            message: mode === 'local'
++              ? 'Sem resposta. Confira se o Asafe e o agente de destino estão abertos.'
++              : 'Sem resposta do agente de destino.'
++          }), timeout);
++          pending.set(env.id, { resolve, reject, timer, onProgress });
++          const go = () => post(env).catch(e => settle(env.id, false, null, { code: 'offline', message: e.message }));
++          if (mode) go(); else { const off = api.on('status', () => { if (mode) { off(); go(); } }); }
++        });
++      },
++      /** Envia um evento sem esperar resposta. */
++      emit(to, action, payload = {}) { return post(envelope('event', to, action, payload)); },
++      /** Lista os agentes do Asafe, quem está online e as ações de cada um. */
++      roster() { return api.request(CORE, 'roster', {}, { timeout: 8000 }).then(r => r.agents); },
++      /** Registra mais uma ação depois de conectado. */
++      handle(name, handler, desc = '') { actions[name] = { handler, desc }; if (mode) post(hello()); },
++      on(kind, fn) { listeners[kind].add(fn); return () => listeners[kind].delete(fn); },
++      close() {
++        if (closed) return;
++        closed = true;
++        try { post(envelope('bye', CORE)); } catch (e) { /* ignore */ }
++        clearInterval(hbTimer); clearInterval(watchTimer);
++        if (es) es.close();
++        if (bc) setTimeout(() => bc.close(), 50);
++        setStatus('offline');
++      }
++    };
++    return api;
++  }
++
++  root.AsafeLink = { connect, VERSION, CORE };
++})(typeof window !== 'undefined' ? window : globalThis);
+diff --git a/asafe.js b/asafe.js
+new file mode 100644
+index 0000000..4a29950
+--- /dev/null
++++ b/asafe.js
+@@ -0,0 +1,129 @@
++// HORÁCIO ⇄ ASAFE — linha de servidor até os outros agentes.
++// O Horácio entende pedidos como "peça ao Miquéias que …" ou "@miqueias …",
++// envia pelo Asafe e mostra a resposta do agente aqui na conversa.
++// Protocolo: companynathanael/Asafe (protocol/PROTOCOLO.md)
++
++(function () {
++  if (!window.AsafeLink) return;
++
++  const KNOWN = { miqueias: "Miquéias", asafe: "Asafe" };
++  let roster = [];
++  const nameOf = (id) => (roster.find((a) => a.id === id) || {}).name || KNOWN[id] || id.charAt(0).toUpperCase() + id.slice(1);
++  const norm = (s) => s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
++  const knownIds = () => new Set([...Object.keys(KNOWN), ...roster.map((a) => a.id)].filter((id) => id !== "asafe" && id !== "horacio"));
++
++  const link = AsafeLink.connect({
++    id: "horacio", name: "Horácio", role: "Agente principal", kind: "principal",
++    actions: {
++      ping: { desc: "Mostra se o Horácio está ativo", handler: () => ({ ready: true }) },
++      notify: {
++        desc: "Mostra uma mensagem de outro agente na conversa do Horácio. payload: { text }",
++        handler: ({ text }, ctx) => { showAgent(ctx.from).set(String(text || "")); return { shown: true }; },
++      },
++    },
++  });
++
++  /* ---------- status no cartão do sistema ---------- */
++  const title = document.querySelector(".system-title");
++  const pulse = document.querySelector(".system-card .pulse");
++  function paintStatus() {
++    const online = roster.filter((a) => a.online && a.id !== "horacio").length;
++    const s = link.status;
++    title.textContent = s === "online" ? `Asafe conectado · ${online} agente${online === 1 ? "" : "s"}` : s === "waiting" ? "Aguardando o Asafe" : "Asafe desconectado";
++    pulse.classList.toggle("off", s !== "online");
++  }
++  async function refreshRoster() {
++    if (link.status !== "online") return paintStatus();
++    try { roster = await link.roster(); } catch (e) { /* Asafe fechado */ }
++    paintStatus();
++  }
++  link.on("status", refreshRoster);
++  setInterval(refreshRoster, 10000);
++
++  /* ---------- entender o pedido ---------- */
++  function parse(text) {
++    const t = norm(text.trim());
++    if (/^\/(agentes|asafe)$/.test(t)) return { roster: true };
++    const ids = knownIds();
++    const pick = (id, prompt) => (ids.has(id) && prompt.trim() ? { to: id, prompt: text.trim().slice(text.trim().length - prompt.length).trim() } : null);
++    let m = t.match(/^@([a-z0-9-]+)[\s,:]+([\s\S]+)$/);
++    if (m) return pick(m[1], m[2]);
++    m = t.match(/^([a-z0-9-]+)\s*[,:]\s*([\s\S]+)$/);
++    if (m) return pick(m[1], m[2]);
++    m = t.match(/^(?:horacio[\s,]+)?(?:por favor[\s,]+)?(?:peca|pede|pedir|pergunte|pergunta|perguntar|diga|diz|fale|fala|mande|manda|solicite|solicita)\s+(?:ao|a|para o|para a|pro|pra|para)\s+([a-z0-9-]+)\s+(?:que\s+|para\s+|pra\s+|se\s+)?([\s\S]+)$/);
++    if (m) return pick(m[1], m[2]);
++    return null;
++  }
++
++  /* ---------- mensagens na conversa ---------- */
++  function showAgent(agentId, note) {
++    const el = document.createElement("div");
++    el.className = "msg ai agent";
++    el.innerHTML = `
++      <div class="avatar agent-avatar mono"></div>
++      <div class="body">
++        <div class="name"><b></b><span class="via mono">via Asafe</span><span>${time()}</span></div>
++        <div class="route mono"></div>
++        <div class="text"><span class="typing"><i></i><i></i><i></i></span></div>
++      </div>`;
++    el.querySelector(".agent-avatar").textContent = nameOf(agentId).slice(0, 2).toUpperCase();
++    el.querySelector(".name b").textContent = nameOf(agentId).toUpperCase();
++    el.querySelector(".route").textContent = note || "";
++    thread.append(el);
++    scrollDown();
++    const txt = el.querySelector(".text");
++    let buf = "";
++    return {
++      el,
++      append(d) { buf += d; txt.textContent = buf; scrollDown(); },
++      set(s) { buf = s; txt.textContent = s; scrollDown(); },
++      fail(msg) { el.classList.add("failed"); txt.textContent = msg; scrollDown(); },
++      note(s) { el.querySelector(".route").textContent = s; },
++    };
++  }
++
++  function horacioSays(textContent) {
++    const el = document.createElement("div");
++    el.className = "msg ai";
++    el.innerHTML = `
++      <div class="avatar"><img src="assets/logo.svg" alt="" /></div>
++      <div class="body"><div class="name">HORÁCIO<span>${time()}</span></div><div class="text"></div></div>`;
++    el.querySelector(".text").textContent = textContent;
++    thread.append(el);
++    scrollDown();
++  }
++
++  async function ask(to, prompt) {
++    const view = showAgent(to, `Horácio → Asafe → ${nameOf(to)}`);
++    try {
++      const r = await link.request(to, "chat.ask", { prompt }, { onProgress: (p) => p && p.delta && view.append(p.delta) });
++      view.set(r.reply || "(sem texto)");
++    } catch (e) {
++      view.fail(`Não consegui falar com ${nameOf(to)}: ${e.message}`);
++    }
++  }
++
++  async function showRoster() {
++    try {
++      roster = await link.roster();
++      paintStatus();
++      const lines = roster.filter((a) => a.id !== "horacio").map((a) =>
++        `• ${a.name}: ${a.online ? "conectado" : "desconectado"}${a.route ? "" : " (sem linha até o Asafe)"}${a.actions.length ? " · ações: " + a.actions.map((x) => x.name).join(", ") : ""}`);
++      horacioSays(lines.length ? `Agentes no Asafe:\n${lines.join("\n")}` : "Nenhum outro agente cadastrado no Asafe.");
++    } catch (e) {
++      horacioSays(`O Asafe não respondeu: ${e.message}`);
++    }
++  }
++
++  /** Chamado pelo app.js. Devolve true se o pedido foi para o Asafe. */
++  function handle(text) {
++    const cmd = parse(text);
++    if (!cmd) return false;
++    addUser(text);
++    if (cmd.roster) showRoster();
++    else ask(cmd.to, cmd.prompt);
++    return true;
++  }
++
++  window.horacioAsafe = { link, handle, parse };
++})();
+diff --git a/index.html b/index.html
+index c687122..fb60635 100644
+--- a/index.html
++++ b/index.html
+@@ -135,5 +135,7 @@
+   </div>
+ 
+   <script src="app.js"></script>
++  <script src="asafe-link.js"></script>
++  <script src="asafe.js"></script>
+ </body>
+ </html>
+diff --git a/styles.css b/styles.css
+index bad766f..35998b9 100644
+--- a/styles.css
++++ b/styles.css
+@@ -268,3 +268,16 @@ svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width:
+ @media (prefers-reduced-motion: reduce) {
+   *, *::before, *::after { animation: none !important; transition: none !important; }
+ }
++
++/* ---------- Asafe: mensagens de outros agentes ---------- */
++.pulse.off { background: var(--ink-3); animation: none; box-shadow: none; }
++.msg.ai .text { white-space: pre-wrap; }
++.msg.ai.agent .agent-avatar {
++  display: grid; place-items: center; border-radius: 50%;
++  font-size: 10.5px; font-weight: 600; letter-spacing: .04em;
++  background: linear-gradient(160deg, var(--glass-hi), var(--glass)); border: 1px solid var(--line-2); color: var(--ink);
++}
++.msg.ai.agent .via { padding: 1px 6px; border-radius: 6px; border: 1px solid var(--line-2); color: var(--ink-2); letter-spacing: .06em; text-transform: uppercase; font-size: 9.5px; }
++.msg.ai.agent .route { font-size: 10.5px; color: var(--ink-3); margin: -2px 0 6px; letter-spacing: .02em; }
++.msg.ai.agent .route:empty { display: none; }
++.msg.ai.agent.failed .text { color: var(--ink-3); font-style: italic; }

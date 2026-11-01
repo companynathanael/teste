@@ -32,6 +32,15 @@
     $('#statData').textContent = fmtBytes(Store.totalUsage());
   }
 
+  function coreStatus() {
+    const el = $('#coreStatus');
+    const on = Bus.roster.filter(r => r.online).length;
+    const m = Bus.mode;
+    el.classList.toggle('server', m === 'server');
+    $('#coreStatusText').textContent = m === 'server' ? `servidor · ${on} ao vivo` : m === 'local' ? `núcleo · ${on} ao vivo` : 'núcleo online';
+    el.title = m === 'server' ? `Servidor do Asafe em ${Bus.server}` : 'Roteando as linhas dentro do navegador';
+  }
+
   function clock() {
     $('#clock').textContent = new Date().toLocaleTimeString('pt-BR');
   }
@@ -80,6 +89,18 @@
       try { Store.importJSON(await f.text()); toast('Backup importado'); FlowView.fit(); }
       catch (err) { toast(err.message, 'err'); }
     });
+
+    Bus.on('change', () => { FlowView.render(); DataView.renderServers(); coreStatus(); });
+    Bus.on('traffic', ({ env, info }) => {
+      if (env.type === 'request' || env.type === 'event') FlowView.pulseRoute(info.route, info.status === 'error' ? 'err' : 'req');
+      else if (env.type === 'response') {
+        if (info.status === 'error') {
+          FlowView.pulseRoute([env.from, env.to], 'err');
+          toast(`Linha recusada: ${env.error && env.error.message}`, 'err');
+        } else FlowView.pulseRoute(info.route, 'res');
+      }
+    });
+    Bus.start();
 
     let saved = 'data';
     try { saved = localStorage.getItem('asafe.tab') || 'data'; } catch (e) { /* ignore */ }

@@ -22,7 +22,7 @@
   function seed() {
     const s = emptyState();
     const horacio = mkAgent({ name: 'Horácio', role: 'Agente principal', kind: 'principal', x: 0, y: -260 });
-    const miqueias = mkAgent({ name: 'Miqueias', role: 'IA auxiliar', kind: 'ia', x: 320, y: 120 });
+    const miqueias = mkAgent({ name: 'Miquéias', role: 'IA auxiliar', kind: 'ia', x: 320, y: 120 });
     s.agents.push(horacio, miqueias);
     for (const a of s.agents) {
       const f = mkDefaultFolders(a.id);
@@ -228,6 +228,21 @@
     removeFile(id) {
       const f = state.files.find(x => x.id === id);
       commit(() => { state.files = state.files.filter(x => x.id !== id); }, `"${f.name}" apagado de ${nameOf(f.agentId)}`);
+    },
+
+    agentBySlug(sl) { return state.agents.find(a => slug(a.name) === sl); },
+
+    /** Acrescenta uma linha a um arquivo de texto do servidor da IA (cria pasta/arquivo se precisar). */
+    appendLine(agentId, folderName, fileName, line, activity) {
+      commit(() => {
+        let folder = state.folders.find(f => f.agentId === agentId && !f.parentId && f.name === folderName);
+        if (!folder) { folder = { id: uid('fd'), agentId, parentId: null, name: folderName, createdAt: now() }; state.folders.push(folder); }
+        let file = state.files.find(f => f.agentId === agentId && f.folderId === folder.id && f.name === fileName);
+        if (!file) { file = mkFile({ agentId, folderId: folder.id, name: fileName, mime: 'text/plain', content: '' }); state.files.push(file); }
+        file.content += line + '\n';
+        file.size = new Blob([file.content]).size;
+        file.updatedAt = now();
+      }, activity || null);
     },
 
     exportJSON() { return JSON.stringify(state, null, 2); },

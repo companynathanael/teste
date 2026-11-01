@@ -582,6 +582,29 @@ textarea.code { font: 12.5px/1.6 var(--mono); }
   *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
 }
 
+/* ---------------- linhas ao vivo ---------------- */
+.live-tag { position: absolute; bottom: -9px; right: 18px; font: 600 9px var(--mono); font-style: normal; letter-spacing: .12em; text-transform: uppercase; padding: 2px 7px; border-radius: 5px; background: #0b0b0d; color: #ff8a95; border: 1px solid rgba(229,20,42,.5); opacity: 0; transform: translateY(4px); transition: opacity .3s, transform .3s var(--ease); pointer-events: none; }
+.node.live .live-tag { opacity: 1; transform: none; }
+.node.live .status-dot { animation: livePulse 1.6s infinite; }
+@keyframes livePulse { 0% { box-shadow: 0 0 0 0 rgba(255,42,61,.7); } 70% { box-shadow: 0 0 0 7px transparent; } 100% { box-shadow: 0 0 0 0 transparent; } }
+.node:not(.live).agent .status-dot { background: var(--off); box-shadow: none; }
+.node.hit-req .node-card, .node.hit-req .core-hex { animation: ping .6s var(--ease); }
+.node.hit-res .node-card, .node.hit-res .core-hex { animation: pingW .6s var(--ease); }
+.node.hit-err .node-card { animation: shake .4s; }
+@keyframes pingW { 40% { box-shadow: 0 0 0 8px rgba(255,255,255,.12), 0 0 30px rgba(255,255,255,.25); } }
+@keyframes shake { 25% { transform: translateX(-4px); } 75% { transform: translateX(4px); } }
+.burst { pointer-events: none; filter: url(#glow); }
+.burst-req { fill: #ff2a3d; }
+.burst-res { fill: #fff; }
+.burst-err { fill: #777; }
+.link.busy .base { stroke: var(--red-2); stroke-width: 3.2; }
+.live-line { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--text-2); }
+.live-line.on { color: var(--text); }
+.act-list { list-style: none; margin: 4px 0 0; padding: 0; display: grid; gap: 4px; }
+.act-list li { display: grid; gap: 1px; padding: 6px 8px; border-radius: 8px; background: rgba(255,255,255,.03); border: 1px solid var(--line); font-size: 11.5px; color: var(--text-2); }
+.act-list code { color: #ff8a95; }
+.core-status.server { background: rgba(255,255,255,.06); border-color: rgba(255,255,255,.18); color: #fff; }
+
 </style>
 </head>
 <body>
@@ -631,7 +654,7 @@ textarea.code { font: 12.5px/1.6 var(--mono); }
         <div class="stat"><b id="statNodes">0</b><span>nós</span></div>
         <div class="stat"><b id="statLinks">0</b><span>linhas</span></div>
         <div class="stat"><b id="statData">0 B</b><span>dados</span></div>
-        <div class="core-status"><i class="pulse"></i><span>núcleo online</span><time id="clock">--:--:--</time></div>
+        <div class="core-status" id="coreStatus" title=""><i class="pulse"></i><span id="coreStatusText">núcleo online</span><time id="clock">--:--:--</time></div>
         <div class="top-actions">
           <button class="icon-btn" id="btnExport" title="Exportar backup do Asafe">
             <svg viewBox="0 0 24 24"><path d="M12 3v12M7 10l5 5 5-5M4 21h16"/></svg>
@@ -792,6 +815,158 @@ textarea.code { font: 12.5px/1.6 var(--mono); }
 
   <script>
 /* =========================================================
+   Asafe · Roteador (núcleo das linhas de servidor)
+   Mesmo código roda no navegador (página do Asafe) e no
+   servidor Node (server/asafe-server.js).
+   ========================================================= */
+(function (root, factory) {
+  if (typeof module === 'object' && module.exports) module.exports = factory();
+  else root.AsafeRouter = factory();
+})(typeof self !== 'undefined' ? self : this, function () {
+  const VERSION = 1;
+  const CORE = 'asafe';
+  const TYPES = ['hello', 'bye', 'request', 'response', 'progress', 'event'];
+
+  const uid = () => 'msg_' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-5);
+
+  function slug(str) {
+    return String(str || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+  }
+
+  function validate(env) {
+    if (!env || typeof env !== 'object') return 'envelope vazio';
+    if (env.asafe !== VERSION) return 'versão de protocolo inválida (esperado asafe: 1)';
+    if (!TYPES.includes(env.type)) return 'tipo desconhecido: ' + env.type;
+    if (!env.id || !env.from) return 'envelope sem id ou from';
+    if (env.type !== 'hello' && env.type !== 'bye' && !env.to) return 'envelope sem destino (to)';
+    if (env.type === 'request' && !env.action) return 'request sem action';
+    return null;
+  }
+
+  /** Caminho entre dois nós pelas linhas de servidor (BFS). */
+  function findPath(topology, from, to) {
+    const adj = new Map();
+    const add = (a, b) => { if (!adj.has(a)) adj.set(a, []); adj.get(a).push(b); };
+    for (const [a, b] of topology.links || []) { add(a, b); add(b, a); }
+    const prev = new Map([[from, null]]);
+    const q = [from];
+    while (q.length) {
+      const c = q.shift();
+      if (c === to) break;
+      for (const n of adj.get(c) || []) if (!prev.has(n)) { prev.set(n, c); q.push(n); }
+    }
+    if (!prev.has(to)) return null;
+    const path = [];
+    for (let c = to; c != null; c = prev.get(c)) path.unshift(c);
+    return path;
+  }
+
+  /**
+   * Cria um roteador.
+   * @param {object} o
+   * @param {() => {agents:{id,name,kind}[], links:[string,string][]}} o.topology
+   * @param {(env:object) => void} o.deliver  entrega um envelope ao agente env.to
+   * @param {(env:object, info:object) => void} [o.onTraffic]  observador (UI/log)
+   */
+  function createRouter({ topology, deliver, onTraffic = () => {} }) {
+    const online = new Map(); // id -> { name, role, kind, actions, since, seen }
+
+    const reply = (req, ok, payload, error) => ({
+      asafe: VERSION, id: uid(), type: 'response', from: CORE, to: req.from,
+      replyTo: req.id, action: req.action, ok, payload: ok ? payload : undefined,
+      error: ok ? undefined : error, ts: Date.now(), via: CORE
+    });
+
+    function fail(env, code, message) {
+      if (env.type !== 'request') return { ok: false, code, message };
+      const r = reply(env, false, null, { code, message });
+      deliver(r);
+      onTraffic(r, { status: 'error', code, route: [CORE, env.from] });
+      return { ok: false, code, message };
+    }
+
+    function roster() {
+      const topo = topology();
+      return topo.agents.map(a => {
+        const p = online.get(a.id);
+        return {
+          id: a.id, name: (p && p.name) || a.name, kind: a.kind,
+          online: !!p, actions: p ? p.actions : [],
+          route: findPath(topo, a.id, CORE)
+        };
+      });
+    }
+
+    function handleCore(env) {
+      if (env.type !== 'request') return { ok: true };
+      let payload;
+      if (env.action === 'ping') payload = { pong: true, ts: Date.now() };
+      else if (env.action === 'roster') payload = { agents: roster() };
+      else return fail(env, 'unknown_action', `O Asafe não conhece a ação "${env.action}".`);
+      const r = reply(env, true, payload);
+      deliver(r);
+      onTraffic(env, { status: 'ok', route: [env.from, CORE] });
+      return { ok: true };
+    }
+
+    function route(env) {
+      const err = validate(env);
+      if (err) return fail(env, 'invalid', err);
+      const topo = topology();
+      const known = id => id === CORE || topo.agents.some(a => a.id === id);
+
+      if (env.type === 'hello') {
+        if (!known(env.from)) return fail(env, 'unknown_agent', `"${env.from}" não está cadastrado no Asafe.`);
+        const p = env.payload || {};
+        online.set(env.from, {
+          name: p.name || env.from, role: p.role || '', kind: p.kind || 'ia',
+          actions: Array.isArray(p.actions) ? p.actions : [], since: online.get(env.from)?.since || Date.now(), seen: Date.now()
+        });
+        onTraffic(env, { status: 'presence' });
+        return { ok: true };
+      }
+      if (env.type === 'bye') {
+        online.delete(env.from);
+        onTraffic(env, { status: 'presence' });
+        return { ok: true };
+      }
+      if (online.has(env.from)) online.get(env.from).seen = Date.now();
+
+      if (!known(env.from)) return fail(env, 'unknown_agent', `"${env.from}" não está cadastrado no Asafe.`);
+      if (env.to === CORE) return handleCore(env);
+      if (!known(env.to)) return fail(env, 'unknown_agent', `"${env.to}" não está cadastrado no Asafe.`);
+
+      // As duas pontas precisam alcançar o Asafe e estar ligadas entre si pelas linhas de servidor.
+      if (!findPath(topo, env.from, CORE)) return fail(env, 'no_route', `${env.from} não tem linha até o Asafe.`);
+      if (!findPath(topo, env.to, CORE)) return fail(env, 'no_route', `${env.to} não tem linha até o Asafe.`);
+      const path = findPath(topo, env.from, env.to);
+      if (!path) return fail(env, 'no_route', `Não existe linha de servidor entre ${env.from} e ${env.to}.`);
+      if (!online.has(env.to)) return fail(env, 'offline', `${env.to} está desconectado do Asafe agora (abra a interface dele).`);
+
+      const out = Object.assign({}, env, { via: CORE, route: path });
+      deliver(out);
+      onTraffic(out, { status: 'ok', route: path });
+      return { ok: true, route: path };
+    }
+
+    /** Remove agentes que pararam de mandar sinal (heartbeat). */
+    function sweep(maxAge = 15000) {
+      const now = Date.now();
+      let changed = false;
+      for (const [id, p] of online) if (now - p.seen > maxAge) { online.delete(id); changed = true; }
+      return changed;
+    }
+
+    return { route, roster, sweep, online, findPath: (a, b) => findPath(topology(), a, b) };
+  }
+
+  return { VERSION, CORE, uid, slug, validate, findPath, createRouter };
+});
+
+</script>
+  <script>
+/* =========================================================
    Asafe · Store
    Camada de dados do agente de servidores. Hoje persiste no
    navegador (localStorage); a interface é isolada aqui para
@@ -815,7 +990,7 @@ textarea.code { font: 12.5px/1.6 var(--mono); }
   function seed() {
     const s = emptyState();
     const horacio = mkAgent({ name: 'Horácio', role: 'Agente principal', kind: 'principal', x: 0, y: -260 });
-    const miqueias = mkAgent({ name: 'Miqueias', role: 'IA auxiliar', kind: 'ia', x: 320, y: 120 });
+    const miqueias = mkAgent({ name: 'Miquéias', role: 'IA auxiliar', kind: 'ia', x: 320, y: 120 });
     s.agents.push(horacio, miqueias);
     for (const a of s.agents) {
       const f = mkDefaultFolders(a.id);
@@ -1023,6 +1198,21 @@ textarea.code { font: 12.5px/1.6 var(--mono); }
       commit(() => { state.files = state.files.filter(x => x.id !== id); }, `"${f.name}" apagado de ${nameOf(f.agentId)}`);
     },
 
+    agentBySlug(sl) { return state.agents.find(a => slug(a.name) === sl); },
+
+    /** Acrescenta uma linha a um arquivo de texto do servidor da IA (cria pasta/arquivo se precisar). */
+    appendLine(agentId, folderName, fileName, line, activity) {
+      commit(() => {
+        let folder = state.folders.find(f => f.agentId === agentId && !f.parentId && f.name === folderName);
+        if (!folder) { folder = { id: uid('fd'), agentId, parentId: null, name: folderName, createdAt: now() }; state.folders.push(folder); }
+        let file = state.files.find(f => f.agentId === agentId && f.folderId === folder.id && f.name === fileName);
+        if (!file) { file = mkFile({ agentId, folderId: folder.id, name: fileName, mime: 'text/plain', content: '' }); state.files.push(file); }
+        file.content += line + '\n';
+        file.size = new Blob([file.content]).size;
+        file.updatedAt = now();
+      }, activity || null);
+    },
+
     exportJSON() { return JSON.stringify(state, null, 2); },
     importJSON(text) {
       const data = JSON.parse(text);
@@ -1198,9 +1388,10 @@ textarea.code { font: 12.5px/1.6 var(--mono); }
 
   function routeLabel(agentId) {
     const r = Store.routeToCore(agentId);
-    if (!r) return { ok: false, text: 'sem rota até o Asafe' };
-    if (r.length === 2) return { ok: true, text: 'conectado direto ao Asafe' };
-    return { ok: true, text: 'via ' + r.slice(1, -1).map(Store.nameOf).join(' → ') };
+    const live = window.Bus && Bus.isOnline(agentId) ? 'ao vivo · ' : '';
+    if (!r) return { ok: false, text: live + 'sem rota até o Asafe' };
+    if (r.length === 2) return { ok: true, text: live + 'conectado direto ao Asafe' };
+    return { ok: true, text: live + 'via ' + r.slice(1, -1).map(Store.nameOf).join(' → ') };
   }
 
   /* ---------------- lista de servidores ---------------- */
@@ -1562,7 +1753,7 @@ textarea.code { font: 12.5px/1.6 var(--mono); }
     render();
   }
 
-  window.DataView = { init, render, open };
+  window.DataView = { init, render, open, renderServers };
 })();
 
 </script>
@@ -1754,6 +1945,7 @@ textarea.code { font: 12.5px/1.6 var(--mono); }
           <span class="status-dot"></span>
         </div>
         ${a.kind === 'principal' ? '<em class="node-flag">principal</em>' : ''}
+        <em class="live-tag">ao vivo</em>
         <button class="port" title="Arraste para conectar" aria-label="Conectar ${esc(a.name)}"></button>
       </div>`;
   }
@@ -1790,7 +1982,11 @@ textarea.code { font: 12.5px/1.6 var(--mono); }
 
     // estado online/offline
     const d = depthMap();
-    for (const [id, el] of nodeEls) el.classList.toggle('offline', id !== CORE && !d.has(id));
+    const live = window.Bus ? Bus.onlineIds() : new Set();
+    for (const [id, el] of nodeEls) {
+      el.classList.toggle('offline', id !== CORE && !d.has(id));
+      el.classList.toggle('live', id !== CORE && live.has(Bus.slugOf(id)));
+    }
     for (const l of s.links) linkEls.get(l.id).classList.toggle('offline', !d.has(l.from) || !d.has(l.to));
 
     buildPackets(d);
@@ -1883,6 +2079,69 @@ textarea.code { font: 12.5px/1.6 var(--mono); }
       `<b class="${id === CORE ? 'core' : ''}">${esc(Store.nameOf(id))}</b>`).join('<i>→</i>') + '</span>';
   }
 
+  function liveHTML(id) {
+    if (!window.Bus) return '';
+    const r = Bus.roster.find(x => x.id === Bus.slugOf(id));
+    const on = r && r.online;
+    const acts = on && r.actions.length
+      ? `<ul class="act-list">${r.actions.map(a => `<li><code class="mono">${esc(a.name)}</code><span>${esc(a.desc)}</span></li>`).join('')}</ul>` : '';
+    return `<div class="insp-block">
+      <span class="label">Interface</span>
+      <span class="live-line ${on ? 'on' : ''}"><span class="status-dot ${on ? 'ok' : 'off'}"></span>${on ? 'conectada ao Asafe agora' : 'fechada / desconectada'}</span>
+      <code class="mono dim">id: ${esc(Bus.slugOf(id))}</code>
+      ${acts}
+    </div>`;
+  }
+
+  function coreLinkHTML() {
+    if (!window.Bus) return '';
+    const m = Bus.mode;
+    const text = m === 'server' ? `servidor ${esc(Bus.server)}` : m === 'local' ? 'roteando no navegador (BroadcastChannel)' : 'iniciando…';
+    const on = Bus.roster.filter(r => r.online).length;
+    return `<div class="insp-block"><span class="label">Linhas de servidor</span>
+      <span class="live-line on"><span class="status-dot ok"></span>${text}</span>
+      <span class="muted" style="margin:0">${on} interface${on === 1 ? '' : 's'} conectada${on === 1 ? '' : 's'} agora</span></div>`;
+  }
+
+  /** Anima um pulso de dados percorrendo a rota (lista de ids do protocolo). */
+  function pulseRoute(route, kind = 'req') {
+    if (!active || !route || route.length < 2) return;
+    const toNode = sl => sl === CORE ? CORE : (Store.agentBySlug(sl) || {}).id;
+    const ids = route.map(toNode);
+    if (ids.some(x => !x)) return;
+    ids.forEach((id, i) => setTimeout(() => {
+      const el = nodeEls.get(id); if (!el) return;
+      el.classList.remove('hit-' + kind); void el.offsetWidth; el.classList.add('hit-' + kind);
+      setTimeout(() => el.classList.remove('hit-' + kind), 700);
+    }, i * 420));
+    let hop = 0;
+    const next = () => {
+      if (hop >= ids.length - 1) return;
+      const a = ids[hop], b = ids[hop + 1];
+      const l = Store.state.links.find(x => (x.from === a && x.to === b) || (x.from === b && x.to === a));
+      const g = l && linkEls.get(l.id);
+      hop++;
+      if (!g) return next();
+      const path = g.querySelector('.base');
+      const len = path.getTotalLength();
+      const forward = l.from === a;
+      const c = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+      c.setAttribute('r', kind === 'req' ? 6 : 5);
+      c.setAttribute('class', 'burst burst-' + kind);
+      els.packets.appendChild(c);
+      g.classList.add('busy');
+      const t0 = performance.now();
+      (function step(now) {
+        const k = Math.min(1, (now - t0) / 420);
+        const pt = path.getPointAtLength((forward ? k : 1 - k) * len);
+        c.setAttribute('cx', pt.x); c.setAttribute('cy', pt.y);
+        if (k < 1) requestAnimationFrame(step);
+        else { c.remove(); setTimeout(() => g.classList.remove('busy'), 300); next(); }
+      })(t0);
+    };
+    next();
+  }
+
   function renderInspector() {
     const box = $('#inspector');
     const s = Store.state;
@@ -1947,7 +2206,8 @@ textarea.code { font: 12.5px/1.6 var(--mono); }
           <small>${isCore ? 'Agente de servidores · centro da rede' : esc(a.role || (a.kind === 'principal' ? 'Agente principal' : 'IA'))}</small>
         </div>
       </div>
-      ${isCore ? '' : `<div class="insp-block"><span class="label">Rota até o Asafe</span>${chainHTML(Store.routeToCore(id))}</div>`}
+      ${isCore ? coreLinkHTML() : `<div class="insp-block"><span class="label">Rota até o Asafe</span>${chainHTML(Store.routeToCore(id))}</div>
+      ${liveHTML(id)}`}
       <div class="insp-block">
         <span class="label">Conexões <span class="mono">${neigh.length}</span></span>
         <ul class="conn-list">${neigh.map(n => `<li><span>${esc(Store.nameOf(n))}</span><button class="icon-btn sm danger" data-unlink="${n}" title="Desligar"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg></button></li>`).join('') || '<li class="empty-mini">Nenhuma linha.</li>'}</ul>
@@ -2137,7 +2397,154 @@ textarea.code { font: 12.5px/1.6 var(--mono); }
     if (on && !fitted) { fitted = true; requestAnimationFrame(() => fit(false)); }
   }
 
-  window.FlowView = { init, render, setActive, fit };
+  window.FlowView = { init, render, setActive, fit, pulseRoute };
+})();
+
+</script>
+  <script>
+/* =========================================================
+   Asafe · Barramento das linhas de servidor
+   - Com o servidor (node server/asafe-server.js) rodando: publica a
+     topologia e observa o tráfego.
+   - Sem servidor: esta página É o roteador, no próprio navegador
+     (BroadcastChannel "asafe-bus").
+   ========================================================= */
+(function () {
+  const { slug, createRouter, CORE } = AsafeRouter;
+  const CHANNEL = 'asafe-bus';
+  const SERVER_KEY = 'asafe.server';
+  const DEFAULT_SERVER = 'http://localhost:7300';
+
+  const listeners = { change: new Set(), traffic: new Set() };
+  const emit = (k, v) => listeners[k].forEach(fn => fn(v));
+
+  let mode = 'connecting';
+  let server = null;
+  let roster = [];
+  let router = null;
+
+  function serverUrl() {
+    try { return localStorage.getItem(SERVER_KEY) || DEFAULT_SERVER; } catch (e) { return DEFAULT_SERVER; }
+  }
+
+  /** Topologia no formato do protocolo: ids = nome em minúsculas sem acento (horacio, miqueias). */
+  function topology() {
+    const s = Store.state;
+    const idOf = id => id === CORE ? CORE : slug(Store.nameOf(id));
+    return {
+      agents: s.agents.map(a => ({ id: slug(a.name), name: a.name, kind: a.kind })),
+      links: s.links.map(l => [idOf(l.from), idOf(l.to)])
+    };
+  }
+
+  const onlineIds = () => new Set(roster.filter(a => a.online).map(a => a.id));
+
+  /* ---------- registro do tráfego ---------- */
+  const day = () => new Date().toISOString().slice(0, 10);
+  const hhmm = t => new Date(t).toLocaleTimeString('pt-BR');
+  const short = v => { const t = typeof v === 'string' ? v : JSON.stringify(v); return t && t.length > 600 ? t.slice(0, 600) + '…' : t; };
+
+  function record(env, info) {
+    emit('traffic', { env, info });
+    if (!['request', 'response', 'event'].includes(env.type)) return;
+    // consultas ao próprio núcleo (roster/ping) não vão para o log, só recusas
+    if ((env.to === CORE || env.from === CORE) && info.status !== 'error') return;
+    let line;
+    if (info.status === 'error' && env.type === 'response') {
+      line = `[${hhmm(env.ts)}] ✕ ${env.action} recusado para ${env.to}: ${env.error && env.error.message}`;
+    } else if (env.type === 'response') {
+      line = `[${hhmm(env.ts)}] ${env.from} → ${env.to} · resposta ${env.action} ${env.ok === false ? '✕ ' + short(env.error && env.error.message) : '✓ ' + short(env.payload)}`;
+    } else {
+      line = `[${hhmm(env.ts)}] ${env.from} → ${env.to} · ${env.type === 'event' ? 'evento' : 'pedido'} ${env.action} ${short(env.payload)}`;
+    }
+    const ids = [...new Set([env.from, env.to])].filter(id => id !== CORE);
+    const agents = ids.map(id => Store.agentBySlug(id)).filter(Boolean);
+    agents.forEach((a, i) => {
+      const nm = id => (Store.agentBySlug(id) || { name: id }).name;
+      const activity = i === 0 && env.type === 'request' && env.from !== CORE && env.to !== CORE
+        ? `${nm(env.from)} → ${nm(env.to)} · ${env.action}`
+        : null;
+      try { Store.appendLine(a.id, 'Conversas', `linha-${day()}.log`, line, activity); } catch (e) { /* armazenamento cheio */ }
+    });
+  }
+
+  /* ---------- modo servidor ---------- */
+  let pushTimer = null;
+  function pushTopology() {
+    if (mode !== 'server') return;
+    clearTimeout(pushTimer);
+    pushTimer = setTimeout(() => {
+      fetch(server + '/topology', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(topology()) })
+        .catch(() => {});
+    }, 150);
+  }
+
+  function startServer(url) {
+    mode = 'server';
+    server = url;
+    pushTopology();
+    const es = new EventSource(server + '/observe');
+    es.onmessage = e => {
+      let m; try { m = JSON.parse(e.data); } catch (err) { return; }
+      if (m.roster) { roster = m.roster; emit('change'); }
+      if (m.kind === 'traffic') record(m.env, m.info);
+    };
+    es.onerror = () => { roster = []; emit('change'); };
+    es.onopen = () => { pushTopology(); emit('change'); };
+  }
+
+  /* ---------- modo navegador (esta página é o roteador) ---------- */
+  function startLocal() {
+    mode = 'local';
+    if (typeof BroadcastChannel === 'undefined') { mode = 'off'; emit('change'); return; }
+    const bc = new BroadcastChannel(CHANNEL);
+    router = createRouter({
+      topology,
+      deliver: env => bc.postMessage({ dir: 'down', env }),
+      onTraffic: (env, info) => {
+        if (info.status === 'presence') { roster = router.roster(); emit('change'); return; }
+        record(env, info);
+      }
+    });
+    bc.onmessage = e => { const m = e.data || {}; if (m.dir === 'up' && m.env) router.route(m.env); };
+    const beat = () => bc.postMessage({ dir: 'down', env: { asafe: 1, id: 'hb_' + Date.now(), type: 'event', from: CORE, to: '*', action: 'core.heartbeat', ts: Date.now() } });
+    beat();
+    setInterval(() => {
+      beat();
+      if (router.sweep(16000)) { roster = router.roster(); emit('change'); }
+    }, 4000);
+    roster = router.roster();
+    emit('change');
+  }
+
+  async function start() {
+    const url = serverUrl().replace(/\/$/, '');
+    try {
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), 900);
+      const r = await fetch(url + '/status', { signal: ctrl.signal });
+      clearTimeout(t);
+      const j = await r.json();
+      if (j && j.asafe === 1) return startServer(url);
+    } catch (e) { /* sem servidor: modo navegador */ }
+    startLocal();
+  }
+
+  Store.on(() => {
+    if (mode === 'server') pushTopology();
+    else if (router) { roster = router.roster(); emit('change'); }
+  });
+
+  window.Bus = {
+    start,
+    get mode() { return mode; },
+    get server() { return server; },
+    get roster() { return roster; },
+    onlineIds,
+    isOnline: agentId => onlineIds().has(slug(Store.nameOf(agentId))),
+    slugOf: agentId => agentId === CORE ? CORE : slug(Store.nameOf(agentId)),
+    on(k, fn) { listeners[k].add(fn); return () => listeners[k].delete(fn); }
+  };
 })();
 
 </script>
@@ -2174,6 +2581,15 @@ textarea.code { font: 12.5px/1.6 var(--mono); }
     $('#statNodes').textContent = s.agents.length + 1;
     $('#statLinks').textContent = s.links.length;
     $('#statData').textContent = fmtBytes(Store.totalUsage());
+  }
+
+  function coreStatus() {
+    const el = $('#coreStatus');
+    const on = Bus.roster.filter(r => r.online).length;
+    const m = Bus.mode;
+    el.classList.toggle('server', m === 'server');
+    $('#coreStatusText').textContent = m === 'server' ? `servidor · ${on} ao vivo` : m === 'local' ? `núcleo · ${on} ao vivo` : 'núcleo online';
+    el.title = m === 'server' ? `Servidor do Asafe em ${Bus.server}` : 'Roteando as linhas dentro do navegador';
   }
 
   function clock() {
@@ -2224,6 +2640,18 @@ textarea.code { font: 12.5px/1.6 var(--mono); }
       try { Store.importJSON(await f.text()); toast('Backup importado'); FlowView.fit(); }
       catch (err) { toast(err.message, 'err'); }
     });
+
+    Bus.on('change', () => { FlowView.render(); DataView.renderServers(); coreStatus(); });
+    Bus.on('traffic', ({ env, info }) => {
+      if (env.type === 'request' || env.type === 'event') FlowView.pulseRoute(info.route, info.status === 'error' ? 'err' : 'req');
+      else if (env.type === 'response') {
+        if (info.status === 'error') {
+          FlowView.pulseRoute([env.from, env.to], 'err');
+          toast(`Linha recusada: ${env.error && env.error.message}`, 'err');
+        } else FlowView.pulseRoute(info.route, 'res');
+      }
+    });
+    Bus.start();
 
     let saved = 'data';
     try { saved = localStorage.getItem('asafe.tab') || 'data'; } catch (e) { /* ignore */ }

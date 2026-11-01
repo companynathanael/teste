@@ -14,6 +14,19 @@ O **Asafe** é o centro da rede de IAs: conecta o agente principal (**Horácio**
 - Clique em nó/linha: selecionar · `Delete`: remover seleção · `Esc`: limpar
 - Duplo clique em uma IA: abre os dados dela
 
+## Linhas de servidor (conexão real entre os agentes)
+
+O Asafe roteia mensagens entre as IAs seguindo as linhas desenhadas no fluxograma. Exemplo: com **Asafe ⇄ Miquéias ⇄ Horácio** ligados, o Horácio pode pedir algo ao Miquéias (`peça ao Miquéias que …`) e a resposta volta pelo Asafe. Cada pedido fica registrado em `Conversas/linha-AAAA-MM-DD.log` no servidor das duas IAs.
+
+- Protocolo: [`protocol/PROTOCOLO.md`](protocol/PROTOCOLO.md)
+- SDK para os agentes: [`sdk/asafe-link.js`](sdk/asafe-link.js)
+- Integrações prontas: [`integrations/horacio.patch`](integrations/horacio.patch), [`integrations/miqueias.patch`](integrations/miqueias.patch)
+
+Dois modos, escolhidos automaticamente:
+
+- **Navegador**: deixe o Asafe aberto no mesmo navegador dos agentes. Ele mesmo faz o roteamento, sem instalar nada.
+- **Servidor**: `node server/asafe-server.js` (porta 7300). Grava os logs em `server/data/logs/`.
+
 ## Rodar
 
 Sem build. Abra `index.html` no navegador ou sirva a pasta:
@@ -34,5 +47,10 @@ js/ui.js          toasts, modais, formatação
 js/data.js        aba Dados de Servidores
 js/flow.js        aba Linhas de Conexão (fluxograma)
 js/app.js         boot, abas, backup
+js/bus.js         roteador das linhas (navegador) / ponte com o servidor
+sdk/              asafe-router.js (regras) e asafe-link.js (SDK dos agentes)
+server/           servidor Node opcional
+integrations/     patches do Horácio e do Miquéias
+tools/            build-single.py gera dist/asafe.html
 assets/           logos (marca e marca + nome)
 ```

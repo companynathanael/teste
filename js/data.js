@@ -33,9 +33,10 @@
 
   function routeLabel(agentId) {
     const r = Store.routeToCore(agentId);
-    if (!r) return { ok: false, text: 'sem rota até o Asafe' };
-    if (r.length === 2) return { ok: true, text: 'conectado direto ao Asafe' };
-    return { ok: true, text: 'via ' + r.slice(1, -1).map(Store.nameOf).join(' → ') };
+    const live = window.Bus && Bus.isOnline(agentId) ? 'ao vivo · ' : '';
+    if (!r) return { ok: false, text: live + 'sem rota até o Asafe' };
+    if (r.length === 2) return { ok: true, text: live + 'conectado direto ao Asafe' };
+    return { ok: true, text: live + 'via ' + r.slice(1, -1).map(Store.nameOf).join(' → ') };
   }
 
   /* ---------------- lista de servidores ---------------- */
@@ -397,5 +398,5 @@
     render();
   }
 
-  window.DataView = { init, render, open };
+  window.DataView = { init, render, open, renderServers };
 })();

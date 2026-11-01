@@ -185,6 +185,7 @@
           <span class="status-dot"></span>
         </div>
         ${a.kind === 'principal' ? '<em class="node-flag">principal</em>' : ''}
+        <em class="live-tag">ao vivo</em>
         <button class="port" title="Arraste para conectar" aria-label="Conectar ${esc(a.name)}"></button>
       </div>`;
   }
@@ -221,7 +222,11 @@
 
     // estado online/offline
     const d = depthMap();
-    for (const [id, el] of nodeEls) el.classList.toggle('offline', id !== CORE && !d.has(id));
+    const live = window.Bus ? Bus.onlineIds() : new Set();
+    for (const [id, el] of nodeEls) {
+      el.classList.toggle('offline', id !== CORE && !d.has(id));
+      el.classList.toggle('live', id !== CORE && live.has(Bus.slugOf(id)));
+    }
     for (const l of s.links) linkEls.get(l.id).classList.toggle('offline', !d.has(l.from) || !d.has(l.to));
 
     buildPackets(d);
@@ -314,6 +319,69 @@
       `<b class="${id === CORE ? 'core' : ''}">${esc(Store.nameOf(id))}</b>`).join('<i>→</i>') + '</span>';
   }
 
+  function liveHTML(id) {
+    if (!window.Bus) return '';
+    const r = Bus.roster.find(x => x.id === Bus.slugOf(id));
+    const on = r && r.online;
+    const acts = on && r.actions.length
+      ? `<ul class="act-list">${r.actions.map(a => `<li><code class="mono">${esc(a.name)}</code><span>${esc(a.desc)}</span></li>`).join('')}</ul>` : '';
+    return `<div class="insp-block">
+      <span class="label">Interface</span>
+      <span class="live-line ${on ? 'on' : ''}"><span class="status-dot ${on ? 'ok' : 'off'}"></span>${on ? 'conectada ao Asafe agora' : 'fechada / desconectada'}</span>
+      <code class="mono dim">id: ${esc(Bus.slugOf(id))}</code>
+      ${acts}
+    </div>`;
+  }
+
+  function coreLinkHTML() {
+    if (!window.Bus) return '';
+    const m = Bus.mode;
+    const text = m === 'server' ? `servidor ${esc(Bus.server)}` : m === 'local' ? 'roteando no navegador (BroadcastChannel)' : 'iniciando…';
+    const on = Bus.roster.filter(r => r.online).length;
+    return `<div class="insp-block"><span class="label">Linhas de servidor</span>
+      <span class="live-line on"><span class="status-dot ok"></span>${text}</span>
+      <span class="muted" style="margin:0">${on} interface${on === 1 ? '' : 's'} conectada${on === 1 ? '' : 's'} agora</span></div>`;
+  }
+
+  /** Anima um pulso de dados percorrendo a rota (lista de ids do protocolo). */
+  function pulseRoute(route, kind = 'req') {
+    if (!active || !route || route.length < 2) return;
+    const toNode = sl => sl === CORE ? CORE : (Store.agentBySlug(sl) || {}).id;
+    const ids = route.map(toNode);
+    if (ids.some(x => !x)) return;
+    ids.forEach((id, i) => setTimeout(() => {
+      const el = nodeEls.get(id); if (!el) return;
+      el.classList.remove('hit-' + kind); void el.offsetWidth; el.classList.add('hit-' + kind);
+      setTimeout(() => el.classList.remove('hit-' + kind), 700);
+    }, i * 420));
+    let hop = 0;
+    const next = () => {
+      if (hop >= ids.length - 1) return;
+      const a = ids[hop], b = ids[hop + 1];
+      const l = Store.state.links.find(x => (x.from === a && x.to === b) || (x.from === b && x.to === a));
+      const g = l && linkEls.get(l.id);
+      hop++;
+      if (!g) return next();
+      const path = g.querySelector('.base');
+      const len = path.getTotalLength();
+      const forward = l.from === a;
+      const c = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+      c.setAttribute('r', kind === 'req' ? 6 : 5);
+      c.setAttribute('class', 'burst burst-' + kind);
+      els.packets.appendChild(c);
+      g.classList.add('busy');
+      const t0 = performance.now();
+      (function step(now) {
+        const k = Math.min(1, (now - t0) / 420);
+        const pt = path.getPointAtLength((forward ? k : 1 - k) * len);
+        c.setAttribute('cx', pt.x); c.setAttribute('cy', pt.y);
+        if (k < 1) requestAnimationFrame(step);
+        else { c.remove(); setTimeout(() => g.classList.remove('busy'), 300); next(); }
+      })(t0);
+    };
+    next();
+  }
+
   function renderInspector() {
     const box = $('#inspector');
     const s = Store.state;
@@ -378,7 +446,8 @@
           <small>${isCore ? 'Agente de servidores · centro da rede' : esc(a.role || (a.kind === 'principal' ? 'Agente principal' : 'IA'))}</small>
         </div>
       </div>
-      ${isCore ? '' : `<div class="insp-block"><span class="label">Rota até o Asafe</span>${chainHTML(Store.routeToCore(id))}</div>`}
+      ${isCore ? coreLinkHTML() : `<div class="insp-block"><span class="label">Rota até o Asafe</span>${chainHTML(Store.routeToCore(id))}</div>
+      ${liveHTML(id)}`}
       <div class="insp-block">
         <span class="label">Conexões <span class="mono">${neigh.length}</span></span>
         <ul class="conn-list">${neigh.map(n => `<li><span>${esc(Store.nameOf(n))}</span><button class="icon-btn sm danger" data-unlink="${n}" title="Desligar"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg></button></li>`).join('') || '<li class="empty-mini">Nenhuma linha.</li>'}</ul>
@@ -568,5 +637,5 @@
     if (on && !fitted) { fitted = true; requestAnimationFrame(() => fit(false)); }
   }
 
-  window.FlowView = { init, render, setActive, fit };
+  window.FlowView = { init, render, setActive, fit, pulseRoute };
 })();
