@@ -87,7 +87,14 @@ Ações do próprio núcleo (`to: "asafe"`):
 | `settings.model` | `{ model: "demo" \| "claude-opus-5-5" \| "claude-sonnet-5-5" \| "claude-haiku-5-5" }` | `{ model, label }` |
 | `ping` | `{}` | `{ ready, busy, model }` |
 
-O pedido aparece na interface do Miquéias como uma conversa nova chamada `⇄ Horácio: …`.
+| `research.run` | `{ query }` | `{ reply, sources: [{ title, url }], searches, model }`, com `progress { delta }` enquanto escreve. Pesquisa na web com a busca do Claude (precisa da chave da API; no modo demo responde com a base local e avisa) |
+| `trade.status` | `{}` | `{ equity, cash, start, returnPct, position, trades, autopilot: { on, mode, strategy, symbol }, lessonsStudied, lastStudy, journal }` (journal = 10 últimas entradas) |
+| `trade.study` | `{}` | `{ ranking: [{ strategy, avgReturnPct }], insights, source }`. Testa 3 estratégias em BTC/ETH/SOL (1h e 4h); leva de 10 a 60 s |
+| `trade.autopilot` | `{ on = true, strategy?: "cruzamento" \| "rsi" \| "rompimento", symbol?: "BTCUSDT" \| "ETHUSDT" \| "SOLUSDT", mode?: "replay" \| "live" }` | `{ on, strategy, mode, symbol, source }` ou `{ on: false }` |
+
+O pedido de `chat.ask` e `research.run` aparece na interface do Miquéias como uma conversa nova chamada `⇄ Horácio: …`. As ações `trade.*` operam o **Laboratório de Trade** do Miquéias, sempre com **dinheiro fictício**.
+
+Todas as ações, exceto `ping`, `trade.status` e `settings.model`, recusam com `not_ready` se o Miquéias estiver na tela de entrada. Estratégia ou ativo inválidos voltam como `bad_request`.
 
 ### Horácio (`horacio`)
 
@@ -102,6 +109,16 @@ No Horácio, o Sr. Nathanael escreve, por exemplo:
 - `@miqueias escreva um plano para o lançamento`
 - `Miquéias, resuma este texto: …`
 - `/agentes` para ver quem está conectado
+
+Habilidades do Miquéias pelo Horácio (detalhes em `docs/CONTROLE.md` do repositório do Horácio):
+
+| Comando no Horácio | Ação enviada |
+| --- | --- |
+| `Miquéias, pesquise sobre …`, `@miqueias busque …`, `peça ao Miquéias que pesquise …`, `/pesquisa …` | `research.run { query }` (espera até 180 s; mostra as fontes como links) |
+| `Miquéias, como está o trade?`, `/trade` | `trade.status` |
+| `Miquéias, faça um estudo de trade`, `Miquéias, teste as estratégias`, `/estudo` | `trade.study` (espera até 120 s) |
+| `Miquéias, ligue o piloto automático em ETH com RSI ao vivo`, `/piloto on …` | `trade.autopilot { on: true, … }`, só depois de **Confirmar** no Horácio |
+| `Miquéias, desligue o piloto`, `/piloto off` | `trade.autopilot { on: false }` |
 
 ## 5. Transportes
 
